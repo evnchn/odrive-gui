@@ -90,7 +90,9 @@ def _create_axis_column(index: int, axis: Any) -> None:
         ui.label(f'Axis {index}').classes('text-xl font-semibold')
         with ui.row().classes('items-center gap-2'):
             power = ui.label().classes('text-sm opacity-70')
-            button = ui.button(on_click=axis.clear_errors).props('icon=bug_report flat round dense color=negative').tooltip('Clear errors')
+            # access via lambda, not `on_click=axis.clear_errors`: the method is optional on
+            # older firmware, so it must not be read until the button (if shown) is clicked.
+            button = ui.button(on_click=lambda: axis.clear_errors()).props('icon=bug_report flat round dense color=negative').tooltip('Clear errors')
             button.set_visibility(hasattr(axis, 'clear_errors'))
 
     def update() -> None:
@@ -204,10 +206,13 @@ def _create_axis_column(index: int, axis: Any) -> None:
 
 
 def _plot(axis: Any, name: str, sample: Any, legend: list[str] | None) -> None:
-    """One checkbox-gated live line plot. ``sample(axis)`` returns the per-line value lists."""
+    """One checkbox-gated live line plot. ``sample(axis)`` returns the per-line value lists.
+
+    The number of lines is taken from ``legend`` (or 1 when there is none) so the
+    device is not read until a timer push actually fires.
+    """
     check = ui.checkbox(f'{name} plot')
-    n = len(sample(axis))
-    plot = ui.line_plot(n=n, update_every=10)
+    plot = ui.line_plot(n=len(legend) if legend else 1, update_every=10)
     if legend:
         plot.with_legend(legend, loc='upper left', ncol=2)
 

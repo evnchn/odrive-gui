@@ -83,7 +83,7 @@ class _MockAxis:
                 axis_to_mirror=255,
             ),
         )
-        self.encoder = types.SimpleNamespace(config=_Config(bandwidth=1000.0))
+        self.encoder = _Encoder()
         self.trap_traj = types.SimpleNamespace(config=_Config(vel_limit=2.0, accel_limit=0.5, decel_limit=0.5))
 
     # telemetry (read-only, animated)
@@ -91,29 +91,29 @@ class _MockAxis:
     def temperature(self) -> float:
         return _wave(20.0, 4.0, 32.0)
 
-    @property
-    def _enc_pos(self) -> float:
-        return _wave(4.0, 1.0)
-
-    @property
-    def _enc_vel(self) -> float:
-        return _wave(4.0, 2.0)
-
     def clear_errors(self) -> None:
         self.error = 0
 
+
+class _Encoder:
+    """Encoder with a settable config and animated position/velocity estimates."""
+
+    def __init__(self) -> None:
+        self.config = _Config(bandwidth=1000.0)
+
     @property
-    def encoder_live(self) -> types.SimpleNamespace:  # pragma: no cover - convenience
-        return self.encoder
+    def pos_estimate(self) -> float:
+        return _wave(4.0, 1.0)
+
+    @property
+    def vel_estimate(self) -> float:
+        return _wave(4.0, 2.0)
 
 
 def make_mock_odrive(serial: int = 0x208E39855253, two_axes: bool = True):
     """Return a fake ODrive device exposing everything ``controls()`` reads."""
     ax0 = _MockAxis(calibrated=True)
     ax1 = _MockAxis(calibrated=two_axes)
-    for ax in (ax0, ax1):
-        ax.encoder.pos_estimate = 0.0
-        ax.encoder.vel_estimate = 0.0
 
     class _Dev:
         serial_number = serial
@@ -135,10 +135,7 @@ def make_mock_odrive(serial: int = 0x208E39855253, two_axes: bool = True):
         def reboot(self) -> None:
             pass
 
-    dev = _Dev()
-    # animate the encoder estimates so plots move
-    dev.axis0.encoder.__dict__['pos_estimate'] = 0.0
-    return dev
+    return _Dev()
 
 
 def install_odrive_stub() -> None:
