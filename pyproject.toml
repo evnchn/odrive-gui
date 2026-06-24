@@ -1,0 +1,56 @@
+[project]
+name = "odrive-gui"
+version = "0.2.0"
+description = "A web-based GUI to tune and debug the ODrive motor controller"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = [
+    "nicegui>=2.0",
+    "odrive>=0.6.2",
+    "matplotlib>=3.7.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.6",
+    "mypy>=1.10",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[project.urls]
+Homepage = "https://github.com/zauberzeug/odrive-gui"
+
+[tool.ruff]
+# 150 matches the repo's established autopep8 convention (see .vscode/settings.json).
+line-length = 150
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "Q"]
+# E731: the per-mode send_* one-liner lambdas read clearly inline next to their buttons.
+ignore = ["E731"]
+
+[tool.ruff.lint.flake8-quotes]
+inline-quotes = "single"
+docstring-quotes = "double"
+
+[tool.ruff.format]
+quote-style = "single"
+
+[tool.mypy]
+# matches the CI interpreter; also lets mypy parse modern dependency stubs (numpy).
+python_version = "3.12"
+mypy_path = "src"
+# the GUI talks to a live `fibre` remote object whose attributes are resolved at
+# runtime, so the device side is intentionally dynamically typed.
+ignore_missing_imports = true
+check_untyped_defs = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["src", "tools"]
+testpaths = ["tests"]
+# the NiceGUI `user` fixture (re)imports this module per test to register the page.
+main_file = "tests/app_under_test.py"

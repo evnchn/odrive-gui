@@ -1,3 +1,18 @@
+"""Per-device control panel for a connected ODrive.
+
+``controls(odrv)`` renders the full tuning UI for one ODrive: a header with
+identity/telemetry and global actions, then one card per calibrated axis with
+mode/state toggles, live input controls, gains, limits and live plots.
+
+The ``odrv`` argument is a live `fibre` remote object, so it is dynamically
+typed (``Any``); every attribute accessed here mirrors the ODrive 0.5.x/0.6.x
+object tree. A faithful in-memory stand-in lives in ``tools/mock_odrive.py`` for
+hardware-free runs and tests.
+"""
+
+from __future__ import annotations
+
+import logging
 from datetime import datetime
 from typing import Any
 
@@ -5,14 +20,16 @@ from nicegui import ui
 from odrive.pyfibre import fibre
 from odrive.utils import dump_errors
 
-MODES = {
+log = logging.getLogger('odrive_gui')
+
+MODES: dict[int, str] = {
     0: 'voltage',
     1: 'torque',
     2: 'velocity',
     3: 'position',
 }
 
-INPUT_MODES = {
+INPUT_MODES: dict[int, str] = {
     0: 'inactive',
     1: 'through',
     2: 'v-ramp',
@@ -22,63 +39,65 @@ INPUT_MODES = {
     7: 'mirror',
 }
 
-STATES = {
+STATES: dict[int, str] = {
     0: 'undefined',
     1: 'idle',
     8: 'loop',
 }
 
 
-def controls(odrv) -> None:
+def controls(odrv: Any) -> None:
+    """Render the control panel for a single connected ODrive device."""
+
     def reboot() -> None:
         try:
             odrv.reboot()
         except Exception as err:
+            # the device drops off the USB bus mid-reboot; that specific loss is expected
             if type(err).__name__ == 'ObjectLostError':
-                pass
+                log.info('ODrive %x rebooting (connection dropped as expected)', odrv.serial_number)
             else:
-                raise err
+                raise
 
-    with ui.row().classes('w-full justify-between items-center'):
-        with ui.row():
-            ui.label(f'SN {hex(odrv.serial_number).removeprefix("0x").upper()}')
-            ui.label(f'HW {odrv.hw_version_major}.{odrv.hw_version_minor}.{odrv.hw_version_variant}')
-            ui.label(f'FW {odrv.fw_version_major}.{odrv.fw_version_minor}.{odrv.fw_version_revision} ' +
-                     f'{"(dev)" if odrv.fw_version_unreleased else ""}')
-            voltage = ui.label()
+    with ui.row().classes('w-full items-center justify-between gap-4'):
+        with ui.row().classes('items-center gap-2'):
+            _chip(f'SN {hex(odrv.serial_number).removeprefix("0x").upper()}')
+            _chip(f'HW {odrv.hw_version_major}.{odrv.hw_version_minor}.{odrv.hw_version_variant}')
+            _chip(f'FW {odrv.fw_version_major}.{odrv.fw_version_minor}.{odrv.fw_version_revision}{" (dev)" if odrv.fw_version_unreleased else ""}')
+            voltage = ui.label().classes('text-lg font-medium text-primary')
             ui.timer(1.0, lambda: voltage.set_text(f'{odrv.vbus_voltage:.2f} V'))
-        with ui.row():
-            ui.button(on_click=lambda: odrv.save_configuration()) \
-                .props('icon=save flat round') \
-                .tooltip('Save configuration')
-            ui.button(on_click=lambda: dump_errors(odrv, hasattr(odrv, 'clear_errors'))) \
-                .props('icon=bug_report flat round') \
-                .tooltip('Dump and clear errors')
-            ui.button(on_click=reboot) \
-                .props('icon=restart_alt flat round') \
-                .tooltip('Reboot odrive')
+        with ui.row().classes('gap-1'):
+            ui.button(on_click=odrv.save_configuration).props('icon=save flat round').tooltip('Save configuration')
+            ui.button(on_click=lambda: dump_errors(odrv, hasattr(odrv, 'clear_errors'))).props('icon=bug_report flat round').tooltip(
+                'Dump and clear errors'
+            )
+            ui.button(on_click=reboot).props('icon=restart_alt flat round').tooltip('Reboot ODrive')
 
-    with ui.row():
-        for a, axis in enumerate([odrv.axis0, odrv.axis1]):
+    with ui.row().classes('gap-4 items-stretch'):
+        for index, axis in enumerate([odrv.axis0, odrv.axis1]):
             if not axis.motor.is_calibrated:
                 continue
-            with ui.card(), ui.column():
-                _create_axis_column(a, axis)
+            with ui.card().classes('rounded-xl shadow-md'), ui.column().classes('gap-3'):
+                _create_axis_column(index, axis)
+
+
+def _chip(text: str) -> ui.label:
+    return ui.label(text).classes('px-2 py-1 rounded bg-slate-500/15 text-sm font-mono')
 
 
 def _create_axis_column(index: int, axis: Any) -> None:
-    ui.markdown(f'### Axis {index}')
+    with ui.row().classes('w-full items-center justify-between'):
+        ui.label(f'Axis {index}').classes('text-xl font-semibold')
+        with ui.row().classes('items-center gap-2'):
+            power = ui.label().classes('text-sm opacity-70')
+            button = ui.button(on_click=axis.clear_errors).props('icon=bug_report flat round dense color=negative').tooltip('Clear errors')
+            button.set_visibility(hasattr(axis, 'clear_errors'))
 
-    with ui.row().classes('w-full justify-between items-center'):
-        power = ui.label()
-        button = ui.button(on_click=lambda: axis.clear_errors()) \
-            .props('icon=bug_report flat round').tooltip('Clear errors')
-        button.set_visibility(hasattr(axis, 'clear_errors'))
-
-    def update():
-        if axis.__class__ == fibre.libfibre.EmptyInterface:
+    def update() -> None:
+        if axis.__class__ is fibre.libfibre.EmptyInterface:
             return
-        power.set_text(f'{axis.motor.current_control.Iq_measured * axis.motor.current_control.v_current_control_integral_q:.1f} W')
+        cc = axis.motor.current_control
+        power.set_text(f'{cc.Iq_measured * cc.v_current_control_integral_q:.1f} W')
         button.set_enabled(axis.error != 0)
 
     ui.timer(0.1, update)
@@ -88,116 +107,113 @@ def _create_axis_column(index: int, axis: Any) -> None:
     enc_cfg = axis.encoder.config
     trp_cfg = axis.trap_traj.config
 
-    with ui.row():
+    with ui.row().classes('gap-2'):
         mode = ui.toggle(MODES).bind_value(ctr_cfg, 'control_mode')
-        ui.toggle(STATES) \
-            .bind_value_to(axis, 'requested_state', forward=lambda x: x or 0) \
-            .bind_value_from(axis, 'current_state')
+        ui.toggle(STATES).bind_value_to(axis, 'requested_state', forward=lambda x: x or 0).bind_value_from(axis, 'current_state')
 
-    with ui.row():
-        with ui.card().bind_visibility_from(mode, 'value', value=1):
-            ui.markdown('**Torque**')
+    with ui.row().classes('gap-4 items-start'):
+        with ui.card().props('flat bordered').bind_visibility_from(mode, 'value', value=1):
+            ui.label('Torque').classes('font-semibold')
             torque = ui.number('input torque', value=0)
-            def send_torque(sign: int) -> None: axis.controller.input_torque = sign * float(torque.value)
+
+            def send_torque(sign: int) -> None:
+                axis.controller.input_torque = sign * float(torque.value)
+
             with ui.row():
                 ui.button(on_click=lambda: send_torque(-1)).props('round flat icon=remove')
                 ui.button(on_click=lambda: send_torque(0)).props('round flat icon=radio_button_unchecked')
                 ui.button(on_click=lambda: send_torque(1)).props('round flat icon=add')
 
-        with ui.card().bind_visibility_from(mode, 'value', value=2):
-            ui.markdown('**Velocity**')
+        with ui.card().props('flat bordered').bind_visibility_from(mode, 'value', value=2):
+            ui.label('Velocity').classes('font-semibold')
             velocity = ui.number('input velocity', value=0)
-            def send_velocity(sign: int) -> None: axis.controller.input_vel = sign * float(velocity.value)
+
+            def send_velocity(sign: int) -> None:
+                axis.controller.input_vel = sign * float(velocity.value)
+
             with ui.row():
                 ui.button(on_click=lambda: send_velocity(-1)).props('round flat icon=fast_rewind')
                 ui.button(on_click=lambda: send_velocity(0)).props('round flat icon=stop')
                 ui.button(on_click=lambda: send_velocity(1)).props('round flat icon=fast_forward')
 
-        with ui.card().bind_visibility_from(mode, 'value', value=3):
-            ui.markdown('**Position**')
+        with ui.card().props('flat bordered').bind_visibility_from(mode, 'value', value=3):
+            ui.label('Position').classes('font-semibold')
             position = ui.number('input position', value=0)
-            def send_position(sign: int) -> None: axis.controller.input_pos = sign * float(position.value)
+
+            def send_position(sign: int) -> None:
+                axis.controller.input_pos = sign * float(position.value)
+
             with ui.row():
                 ui.button(on_click=lambda: send_position(-1)).props('round flat icon=skip_previous')
                 ui.button(on_click=lambda: send_position(0)).props('round flat icon=exposure_zero')
                 ui.button(on_click=lambda: send_position(1)).props('round flat icon=skip_next')
 
-        with ui.column():
-            ui.number('pos_gain', format='%.3f').props('outlined').bind_value(ctr_cfg, 'pos_gain')
-            ui.number('vel_gain', format='%.3f').props('outlined').bind_value(ctr_cfg, 'vel_gain')
-            ui.number('vel_integrator_gain', format='%.3f').props('outlined').bind_value(ctr_cfg, 'vel_integrator_gain')
+        with ui.column().classes('gap-1'):
+            ui.label('Gains').classes('text-xs uppercase tracking-wide opacity-60')
+            ui.number('pos_gain', format='%.3f').props('outlined dense').bind_value(ctr_cfg, 'pos_gain')
+            ui.number('vel_gain', format='%.3f').props('outlined dense').bind_value(ctr_cfg, 'vel_gain')
+            ui.number('vel_integrator_gain', format='%.3f').props('outlined dense').bind_value(ctr_cfg, 'vel_integrator_gain')
             if hasattr(ctr_cfg, 'vel_differentiator_gain'):
-                ui.number('vel_differentiator_gain', format='%.3f').props('outlined').bind_value(ctr_cfg, 'vel_differentiator_gain')
+                ui.number('vel_differentiator_gain', format='%.3f').props('outlined dense').bind_value(ctr_cfg, 'vel_differentiator_gain')
 
-        with ui.column():
-            ui.number('vel_limit', format='%.3f').props('outlined').bind_value(ctr_cfg, 'vel_limit')
-            ui.number('enc_bandwidth', format='%.3f').props('outlined').bind_value(enc_cfg, 'bandwidth')
-            ui.number('current_lim', format='%.1f').props('outlined').bind_value(mtr_cfg, 'current_lim')
-            ui.number('cur_bandwidth', format='%.3f').props('outlined').bind_value(mtr_cfg, 'current_control_bandwidth')
-            ui.number('torque_lim', format='%.1f').props('outlined').bind_value(mtr_cfg, 'torque_lim')
-            ui.number('requested_cur_range', format='%.1f').props('outlined').bind_value(mtr_cfg, 'requested_current_range')
+        with ui.column().classes('gap-1'):
+            ui.label('Limits & bandwidth').classes('text-xs uppercase tracking-wide opacity-60')
+            ui.number('vel_limit', format='%.3f').props('outlined dense').bind_value(ctr_cfg, 'vel_limit')
+            ui.number('enc_bandwidth', format='%.3f').props('outlined dense').bind_value(enc_cfg, 'bandwidth')
+            ui.number('current_lim', format='%.1f').props('outlined dense').bind_value(mtr_cfg, 'current_lim')
+            ui.number('cur_bandwidth', format='%.3f').props('outlined dense').bind_value(mtr_cfg, 'current_control_bandwidth')
+            ui.number('torque_lim', format='%.1f').props('outlined dense').bind_value(mtr_cfg, 'torque_lim')
+            ui.number('requested_cur_range', format='%.1f').props('outlined dense').bind_value(mtr_cfg, 'requested_current_range')
 
     input_mode = ui.toggle(INPUT_MODES).bind_value(ctr_cfg, 'input_mode')
-    with ui.row():
-        ui.number('inertia', format='%.3f').props('outlined') \
-            .bind_value(ctr_cfg, 'inertia') \
-            .bind_visibility_from(input_mode, 'value', backward=lambda m: m in [2, 3, 5])
-        ui.number('velocity ramp rate', format='%.3f').props('outlined') \
-            .bind_value(ctr_cfg, 'vel_ramp_rate') \
-            .bind_visibility_from(input_mode, 'value', value=2)
-        ui.number('input filter bandwidth', format='%.3f').props('outlined') \
-            .bind_value(ctr_cfg, 'input_filter_bandwidth') \
-            .bind_visibility_from(input_mode, 'value', value=3)
-        ui.number('trajectory velocity limit', format='%.3f').props('outlined') \
-            .bind_value(trp_cfg, 'vel_limit') \
-            .bind_visibility_from(input_mode, 'value', value=5)
-        ui.number('trajectory acceleration limit', format='%.3f').props('outlined') \
-            .bind_value(trp_cfg, 'accel_limit') \
-            .bind_visibility_from(input_mode, 'value', value=5)
-        ui.number('trajectory deceleration limit', format='%.3f').props('outlined') \
-            .bind_value(trp_cfg, 'decel_limit') \
-            .bind_visibility_from(input_mode, 'value', value=5)
-        ui.number('torque ramp rate', format='%.3f').props('outlined') \
-            .bind_value(ctr_cfg, 'torque_ramp_rate') \
-            .bind_visibility_from(input_mode, 'value', value=6)
-        ui.number('mirror ratio', format='%.3f').props('outlined') \
-            .bind_value(ctr_cfg, 'mirror_ratio') \
-            .bind_visibility_from(input_mode, 'value', value=7)
-        ui.toggle({0: 'axis 0', 1: 'axis 1'}) \
-            .bind_value(ctr_cfg, 'axis_to_mirror', forward=lambda x: 255 if x is None else x) \
-            .bind_visibility_from(input_mode, 'value', value=7)
+    with ui.row().classes('gap-2 items-start'):
+        ui.number('inertia', format='%.3f').props('outlined dense').bind_value(ctr_cfg, 'inertia').bind_visibility_from(
+            input_mode, 'value', backward=lambda m: m in [2, 3, 5]
+        )
+        ui.number('velocity ramp rate', format='%.3f').props('outlined dense').bind_value(ctr_cfg, 'vel_ramp_rate').bind_visibility_from(
+            input_mode, 'value', value=2
+        )
+        ui.number('input filter bandwidth', format='%.3f').props('outlined dense').bind_value(ctr_cfg, 'input_filter_bandwidth').bind_visibility_from(
+            input_mode, 'value', value=3
+        )
+        ui.number('trajectory velocity limit', format='%.3f').props('outlined dense').bind_value(trp_cfg, 'vel_limit').bind_visibility_from(
+            input_mode, 'value', value=5
+        )
+        ui.number('trajectory acceleration limit', format='%.3f').props('outlined dense').bind_value(trp_cfg, 'accel_limit').bind_visibility_from(
+            input_mode, 'value', value=5
+        )
+        ui.number('trajectory deceleration limit', format='%.3f').props('outlined dense').bind_value(trp_cfg, 'decel_limit').bind_visibility_from(
+            input_mode, 'value', value=5
+        )
+        ui.number('torque ramp rate', format='%.3f').props('outlined dense').bind_value(ctr_cfg, 'torque_ramp_rate').bind_visibility_from(
+            input_mode, 'value', value=6
+        )
+        ui.number('mirror ratio', format='%.3f').props('outlined dense').bind_value(ctr_cfg, 'mirror_ratio').bind_visibility_from(
+            input_mode, 'value', value=7
+        )
+        ui.toggle({0: 'axis 0', 1: 'axis 1'}).bind_value(ctr_cfg, 'axis_to_mirror', forward=lambda x: 255 if x is None else x).bind_visibility_from(
+            input_mode, 'value', value=7
+        )
 
-    def pos_push() -> None:
-        pos_plot.push([datetime.now()], [[axis.controller.input_pos], [axis.encoder.pos_estimate]])
-    pos_check = ui.checkbox('Position plot')
-    pos_plot = ui.line_plot(n=2, update_every=10).with_legend(['input_pos', 'pos_estimate'], loc='upper left', ncol=2)
-    pos_timer = ui.timer(0.05, pos_push)
-    pos_check.bind_value_to(pos_plot, 'visible').bind_value_to(pos_timer, 'active')
+    with ui.expansion('Live plots', icon='show_chart').classes('w-full'):
+        _plot(axis, 'Position', lambda ax: ([ax.controller.input_pos], [ax.encoder.pos_estimate]), ['input_pos', 'pos_estimate'])
+        _plot(axis, 'Velocity', lambda ax: ([ax.controller.input_vel], [ax.encoder.vel_estimate]), ['input_vel', 'vel_estimate'])
+        _plot(axis, 'Id', lambda ax: ([ax.motor.current_control.Id_setpoint], [ax.motor.current_control.Id_measured]), ['Id_setpoint', 'Id_measured'])
+        _plot(axis, 'Iq', lambda ax: ([ax.motor.current_control.Iq_setpoint], [ax.motor.current_control.Iq_measured]), ['Iq_setpoint', 'Iq_measured'])
+        _plot(axis, 'Temperature', lambda ax: ([ax.motor.fet_thermistor.temperature],), None)
 
-    def vel_push() -> None:
-        vel_plot.push([datetime.now()], [[axis.controller.input_vel], [axis.encoder.vel_estimate]])
-    vel_check = ui.checkbox('Velocity plot')
-    vel_plot = ui.line_plot(n=2, update_every=10).with_legend(['input_vel', 'vel_estimate'], loc='upper left', ncol=2)
-    vel_timer = ui.timer(0.05, vel_push)
-    vel_check.bind_value_to(vel_plot, 'visible').bind_value_to(vel_timer, 'active')
 
-    def id_push() -> None:
-        id_plot.push([datetime.now()], [[axis.motor.current_control.Id_setpoint], [axis.motor.current_control.Id_measured]])
-    id_check = ui.checkbox('Id plot')
-    id_plot = ui.line_plot(n=2, update_every=10).with_legend(['Id_setpoint', 'Id_measured'], loc='upper left', ncol=2)
-    id_timer = ui.timer(0.05, id_push)
-    id_check.bind_value_to(id_plot, 'visible').bind_value_to(id_timer, 'active')
+def _plot(axis: Any, name: str, sample: Any, legend: list[str] | None) -> None:
+    """One checkbox-gated live line plot. ``sample(axis)`` returns the per-line value lists."""
+    check = ui.checkbox(f'{name} plot')
+    n = len(sample(axis))
+    plot = ui.line_plot(n=n, update_every=10)
+    if legend:
+        plot.with_legend(legend, loc='upper left', ncol=2)
 
-    def iq_push() -> None:
-        iq_plot.push([datetime.now()], [[axis.motor.current_control.Iq_setpoint], [axis.motor.current_control.Iq_measured]])
-    iq_check = ui.checkbox('Iq plot')
-    iq_plot = ui.line_plot(n=2, update_every=10).with_legend(['Iq_setpoint', 'Iq_measured'], loc='upper left', ncol=2)
-    iq_timer = ui.timer(0.05, iq_push)
-    iq_check.bind_value_to(iq_plot, 'visible').bind_value_to(iq_timer, 'active')
+    def push() -> None:
+        # line_plot uses a datetime x-axis (matplotlib handles it); the stub types x as float.
+        plot.push([datetime.now()], list(sample(axis)))  # type: ignore[list-item]
 
-    def t_push() -> None:
-        t_plot.push([datetime.now()], [[axis.motor.fet_thermistor.temperature]])
-    t_check = ui.checkbox('Temperature plot')
-    t_plot = ui.line_plot(n=1, update_every=10)
-    t_timer = ui.timer(0.05, t_push)
-    t_check.bind_value_to(t_plot, 'visible').bind_value_to(t_timer, 'active')
+    timer = ui.timer(0.05, push)
+    check.bind_value_to(plot, 'visible').bind_value_to(timer, 'active')

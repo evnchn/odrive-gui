@@ -1,39 +1,54 @@
 #!/usr/bin/env python3
+"""ODrive GUI — a web UI to tune and debug ODrive motor controllers.
+
+Discovers ODrives on the USB bus and renders one live control panel per device,
+adding and removing panels as devices connect and disconnect.
+"""
+
+from __future__ import annotations
+
 import asyncio
 import logging
+from types import SimpleNamespace
 
 import odrive
 from nicegui import app, ui
 
 from controls import controls
+from theme import apply_theme
 
 logging.getLogger('nicegui').setLevel(logging.ERROR)
+log = logging.getLogger('odrive_gui')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
-ui.colors(primary='#6e93d6')
+apply_theme()
 
-devices: dict[int, ui.element] = {}
+# panels currently rendered, keyed by device serial number; held on a namespace
+# so its truthiness can drive the "waiting…" placeholder via a visibility binding.
+state = SimpleNamespace(devices={})
 
 ui.markdown('## ODrive GUI')
-ui.markdown('Waiting for ODrive devices to connect...').bind_visibility_from(globals(), 'devices', lambda d: not d)
-container = ui.row()
+ui.markdown('Waiting for ODrive devices to connect…').bind_visibility_from(state, 'devices', backward=lambda d: not d)
+container = ui.row().classes('gap-4 items-stretch')
 
 
 async def discovery_loop() -> None:
+    """Continuously reconcile the rendered panels with the connected devices."""
     odrive.start_discovery(odrive.default_usb_search_path)
     while True:
         for device in odrive.connected_devices:
-            if device.serial_number not in devices:
-                print(f'Adding ODrive {device.serial_number:x}')
+            if device.serial_number not in state.devices:
+                log.info('Adding ODrive %x', device.serial_number)
                 with container:
-                    with ui.column() as devices[device.serial_number]:
+                    with ui.column() as state.devices[device.serial_number]:
                         controls(device)
-        for serial_number in list(devices):
+        for serial_number in list(state.devices):
             if not any(d.serial_number == serial_number for d in odrive.connected_devices):
-                print(f'Removing ODrive {serial_number:x}')
-                container.remove(devices.pop(serial_number))
+                log.info('Removing ODrive %x', serial_number)
+                container.remove(state.devices.pop(serial_number))
         await asyncio.wrap_future(odrive.connected_devices_changed)
 
 
-app.on_startup(discovery_loop())
+app.on_startup(discovery_loop)
 
 ui.run(title='ODrive Motor Tuning')
