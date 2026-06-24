@@ -2,20 +2,17 @@
 
 The fixture resets globals and (re)imports this module per test to register the page,
 so the page must live in an importable module rather than inside the test itself.
-``conftest.install_odrive_stub()`` has already run by import time.
+``conftest.install_odrive_stub()`` has already run by import time. The page is built by
+the shared ``build_mock_page()`` helper so tests exercise the same chrome the dev runner shows.
 """
 
-from mock_odrive import make_mock_odrive
+from mock_odrive import build_mock_page
 from nicegui import ui
-
-from controls import controls
-from theme import apply_theme
 
 
 @ui.page('/')
 def index() -> None:
-    apply_theme()
-    controls(make_mock_odrive())
+    build_mock_page()
 
 
 ui.run()  # intercepted by the NiceGUI test harness; required for the `user` fixture

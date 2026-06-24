@@ -50,12 +50,14 @@ def controls(odrv: Any) -> None:
     """Render the control panel for a single connected ODrive device."""
 
     def reboot() -> None:
+        serial = odrv.serial_number  # read while the device is still on the bus
         try:
             odrv.reboot()
         except Exception as err:
-            # the device drops off the USB bus mid-reboot; that specific loss is expected
+            # the device drops off the USB bus mid-reboot; that specific loss is expected.
+            # do NOT touch `odrv` here — a live read on the just-disconnected device raises again.
             if type(err).__name__ == 'ObjectLostError':
-                log.info('ODrive %x rebooting (connection dropped as expected)', odrv.serial_number)
+                log.info('ODrive %x rebooting (connection dropped as expected)', serial)
             else:
                 raise
 
@@ -67,7 +69,9 @@ def controls(odrv: Any) -> None:
             voltage = ui.label().classes('text-lg font-medium text-primary')
             ui.timer(1.0, lambda: voltage.set_text(f'{odrv.vbus_voltage:.2f} V'))
         with ui.row().classes('gap-1'):
-            ui.button(on_click=odrv.save_configuration).props('icon=save flat round').tooltip('Save configuration')
+            # wrap in a lambda (like the original): passing the bare fibre RemoteFunction makes
+            # NiceGUI introspect its signature, which is brittle on the C-backed proxy.
+            ui.button(on_click=lambda: odrv.save_configuration()).props('icon=save flat round').tooltip('Save configuration')
             ui.button(on_click=lambda: dump_errors(odrv, hasattr(odrv, 'clear_errors'))).props('icon=bug_report flat round').tooltip(
                 'Dump and clear errors'
             )

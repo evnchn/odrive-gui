@@ -1,3 +1,12 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# the app is run as scripts under src/ (python src/main.py), not imported as a package;
+# installing the project just resolves the dependency set (single source of truth for Docker).
+py-modules = []
+
 [project]
 name = "odrive-gui"
 version = "0.2.0"

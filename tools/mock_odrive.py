@@ -135,7 +135,29 @@ def make_mock_odrive(serial: int = 0x208E39855253, two_axes: bool = True):
         def reboot(self) -> None:
             pass
 
+        def clear_errors(self) -> None:  # present on 0.6.x firmware; drives the hasattr() True branch
+            pass
+
     return _Dev()
+
+
+def build_mock_page() -> None:
+    """Build the themed dev/test page (header + control panel) for one mock device.
+
+    Shared by ``tools/run_mock.py`` and ``tests/app_under_test.py`` so the dev runner,
+    the screenshots and the render tests all show byte-identical chrome. Imports are
+    local because ``controls``/``theme`` live under ``src`` (on the path at call time)
+    and ``controls`` requires ``install_odrive_stub()`` to have run first.
+    """
+    from nicegui import ui
+
+    from controls import controls
+    from theme import apply_theme
+
+    apply_theme()
+    ui.markdown('## ODrive GUI')
+    with ui.row().classes('gap-4 items-stretch'):
+        controls(make_mock_odrive())
 
 
 def install_odrive_stub() -> None:
