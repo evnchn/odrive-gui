@@ -45,7 +45,14 @@ async def discovery_loop() -> None:
         for serial_number in list(state.devices):
             if not any(d.serial_number == serial_number for d in odrive.connected_devices):
                 log.info('Removing ODrive %x', serial_number)
-                container.remove(state.devices.pop(serial_number))
+                column = state.devices.pop(serial_number)
+                # ui.timer does not auto-cancel on element deletion, so the panel's
+                # voltage/power/plot timers would keep polling the lost device. Cancel
+                # them before removing the column.
+                for element in column.descendants():
+                    if isinstance(element, ui.timer):
+                        element.cancel()
+                container.remove(column)
         await asyncio.wrap_future(odrive.connected_devices_changed)
 
 
