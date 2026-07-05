@@ -51,24 +51,37 @@ class _CurrentControl:
         return _wave(3.0, 0.2, 1.1)
 
 
+class _Thermistor:
+    """The FET thermistor, mirroring ``odrv.axisN.motor.fet_thermistor``.
+
+    Exposes only ``.temperature`` — deliberately its own class rather than aliasing the
+    axis, so the mock's object graph is shape-faithful. ``controls.py`` uses ``hasattr``
+    feature-detection; a stray path like ``axis.current_control`` or ``axis.temperature``
+    must therefore fail here (as on real hardware) instead of silently resolving.
+    """
+
+    @property
+    def temperature(self) -> float:
+        return _wave(20.0, 4.0, 32.0)
+
+
 class _MockAxis:
-    def __init__(self, calibrated: bool = True) -> None:
+    def __init__(self, calibrated: bool = True, control_mode: int = 2) -> None:
         self.error = 0
         self.requested_state = 1
         self.current_state = 1
-        self.current_control = _CurrentControl()
         self.motor = types.SimpleNamespace(
             is_calibrated=calibrated,
-            current_control=self.current_control,
+            current_control=_CurrentControl(),  # lives on the motor only, as on hardware
             config=_Config(current_lim=10.0, current_control_bandwidth=1000.0, torque_lim=float('inf'), requested_current_range=60.0),
-            fet_thermistor=self,  # exposes .temperature below
+            fet_thermistor=_Thermistor(),
         )
         self.controller = types.SimpleNamespace(
             input_torque=0.0,
             input_vel=0.0,
             input_pos=0.0,
             config=_Config(
-                control_mode=2,
+                control_mode=control_mode,
                 input_mode=1,
                 pos_gain=20.0,
                 vel_gain=0.16,
@@ -85,11 +98,6 @@ class _MockAxis:
         )
         self.encoder = _Encoder()
         self.trap_traj = types.SimpleNamespace(config=_Config(vel_limit=2.0, accel_limit=0.5, decel_limit=0.5))
-
-    # telemetry (read-only, animated)
-    @property
-    def temperature(self) -> float:
-        return _wave(20.0, 4.0, 32.0)
 
     def clear_errors(self) -> None:
         self.error = 0
@@ -110,10 +118,14 @@ class _Encoder:
         return _wave(4.0, 2.0)
 
 
-def make_mock_odrive(serial: int = 0x208E39855253, two_axes: bool = True):
-    """Return a fake ODrive device exposing everything ``controls()`` reads."""
-    ax0 = _MockAxis(calibrated=True)
-    ax1 = _MockAxis(calibrated=two_axes)
+def make_mock_odrive(serial: int = 0x208E39855253, two_axes: bool = True, control_mode: int = 2):
+    """Return a fake ODrive device exposing everything ``controls()`` reads.
+
+    ``control_mode`` sets the initial controller mode on both axes; it drives which
+    motion card (torque/velocity/position) starts visible, so tests can render each.
+    """
+    ax0 = _MockAxis(calibrated=True, control_mode=control_mode)
+    ax1 = _MockAxis(calibrated=two_axes, control_mode=control_mode)
 
     class _Dev:
         serial_number = serial
@@ -141,23 +153,25 @@ def make_mock_odrive(serial: int = 0x208E39855253, two_axes: bool = True):
     return _Dev()
 
 
-def build_mock_page() -> None:
+def build_mock_page(control_mode: int = 2) -> None:
     """Build the themed dev/test page (header + control panel) for one mock device.
 
     Shared by ``tools/run_mock.py`` and ``tests/app_under_test.py`` so the dev runner,
     the screenshots and the render tests all show byte-identical chrome. Imports are
     local because ``controls``/``theme`` live under ``src`` (on the path at call time)
     and ``controls`` requires ``install_odrive_stub()`` to have run first.
+
+    ``control_mode`` selects which motion card starts visible (see ``make_mock_odrive``).
     """
     from nicegui import ui
 
     from controls import controls
-    from theme import apply_theme
+    from theme import apply_theme, header
 
-    apply_theme()
-    ui.markdown('## ODrive GUI')
+    dark = apply_theme()
+    header(dark)
     with ui.row().classes('gap-4 items-stretch'):
-        controls(make_mock_odrive())
+        controls(make_mock_odrive(control_mode=control_mode))
 
 
 def install_odrive_stub() -> None:

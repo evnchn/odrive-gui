@@ -49,8 +49,13 @@ STATES: dict[int, str] = {
 def controls(odrv: Any) -> None:
     """Render the control panel for a single connected ODrive device."""
 
+    # Read the serial once, while the device is guaranteed on the bus. Reused for the SN
+    # chip and the reboot log so reboot() never does a live read on `odrv` — that read
+    # would raise ObjectLostError if the panel outlived the device leaving the bus, and
+    # it saves a blocking USB round-trip per reboot click.
+    serial = odrv.serial_number
+
     def reboot() -> None:
-        serial = odrv.serial_number  # read while the device is still on the bus
         try:
             odrv.reboot()
         except Exception as err:
@@ -63,7 +68,7 @@ def controls(odrv: Any) -> None:
 
     with ui.row().classes('w-full items-center justify-between gap-4'):
         with ui.row().classes('items-center gap-2'):
-            _chip(f'SN {hex(odrv.serial_number).removeprefix("0x").upper()}')
+            _chip(f'SN {hex(serial).removeprefix("0x").upper()}')
             _chip(f'HW {odrv.hw_version_major}.{odrv.hw_version_minor}.{odrv.hw_version_variant}')
             _chip(f'FW {odrv.fw_version_major}.{odrv.fw_version_minor}.{odrv.fw_version_revision}{" (dev)" if odrv.fw_version_unreleased else ""}')
             voltage = ui.label().classes('text-lg font-medium text-primary')
@@ -87,6 +92,15 @@ def controls(odrv: Any) -> None:
 
 def _chip(text: str) -> ui.label:
     return ui.label(text).classes('px-2 py-1 rounded bg-slate-500/15 text-sm font-mono')
+
+
+def _field_value(field: ui.number) -> float:
+    """The number field's value as a float, treating an empty field (``None`` in
+    NiceGUI 3.x) as 0. This is a safety guard: without it ``float(None)`` raises and
+    the motion handler aborts — so pressing *stop* (``sign * 0``) on a spinning motor
+    with a cleared input box would fail to write 0 and the motor would keep running.
+    """
+    return float(field.value or 0)
 
 
 def _create_axis_column(index: int, axis: Any) -> None:
@@ -114,8 +128,8 @@ def _create_axis_column(index: int, axis: Any) -> None:
     trp_cfg = axis.trap_traj.config
 
     with ui.row().classes('gap-2'):
-        mode = ui.toggle(MODES).bind_value(ctr_cfg, 'control_mode')
-        ui.toggle(STATES).bind_value_to(axis, 'requested_state', forward=lambda x: x or 0).bind_value_from(axis, 'current_state')
+        mode = ui.toggle(MODES).props('outline').bind_value(ctr_cfg, 'control_mode')
+        ui.toggle(STATES).props('outline').bind_value_to(axis, 'requested_state', forward=lambda x: x or 0).bind_value_from(axis, 'current_state')
 
     with ui.row().classes('gap-4 items-start'):
         with ui.card().props('flat bordered').bind_visibility_from(mode, 'value', value=1):
@@ -123,7 +137,7 @@ def _create_axis_column(index: int, axis: Any) -> None:
             torque = ui.number('input torque', value=0)
 
             def send_torque(sign: int) -> None:
-                axis.controller.input_torque = sign * float(torque.value)
+                axis.controller.input_torque = sign * _field_value(torque)
 
             with ui.row():
                 ui.button(on_click=lambda: send_torque(-1)).props('round flat icon=remove')
@@ -135,7 +149,7 @@ def _create_axis_column(index: int, axis: Any) -> None:
             velocity = ui.number('input velocity', value=0)
 
             def send_velocity(sign: int) -> None:
-                axis.controller.input_vel = sign * float(velocity.value)
+                axis.controller.input_vel = sign * _field_value(velocity)
 
             with ui.row():
                 ui.button(on_click=lambda: send_velocity(-1)).props('round flat icon=fast_rewind')
@@ -147,7 +161,7 @@ def _create_axis_column(index: int, axis: Any) -> None:
             position = ui.number('input position', value=0)
 
             def send_position(sign: int) -> None:
-                axis.controller.input_pos = sign * float(position.value)
+                axis.controller.input_pos = sign * _field_value(position)
 
             with ui.row():
                 ui.button(on_click=lambda: send_position(-1)).props('round flat icon=skip_previous')
@@ -171,7 +185,7 @@ def _create_axis_column(index: int, axis: Any) -> None:
             ui.number('torque_lim', format='%.1f').props('outlined dense').bind_value(mtr_cfg, 'torque_lim')
             ui.number('requested_cur_range', format='%.1f').props('outlined dense').bind_value(mtr_cfg, 'requested_current_range')
 
-    input_mode = ui.toggle(INPUT_MODES).bind_value(ctr_cfg, 'input_mode')
+    input_mode = ui.toggle(INPUT_MODES).props('outline').bind_value(ctr_cfg, 'input_mode')
     with ui.row().classes('gap-2 items-start'):
         ui.number('inertia', format='%.3f').props('outlined dense').bind_value(ctr_cfg, 'inertia').bind_visibility_from(
             input_mode, 'value', backward=lambda m: m in [2, 3, 5]
@@ -197,9 +211,9 @@ def _create_axis_column(index: int, axis: Any) -> None:
         ui.number('mirror ratio', format='%.3f').props('outlined dense').bind_value(ctr_cfg, 'mirror_ratio').bind_visibility_from(
             input_mode, 'value', value=7
         )
-        ui.toggle({0: 'axis 0', 1: 'axis 1'}).bind_value(ctr_cfg, 'axis_to_mirror', forward=lambda x: 255 if x is None else x).bind_visibility_from(
-            input_mode, 'value', value=7
-        )
+        ui.toggle({0: 'axis 0', 1: 'axis 1'}).props('outline').bind_value(
+            ctr_cfg, 'axis_to_mirror', forward=lambda x: 255 if x is None else x
+        ).bind_visibility_from(input_mode, 'value', value=7)
 
     with ui.expansion('Live plots', icon='show_chart').classes('w-full'):
         _plot(axis, 'Position', lambda ax: ([ax.controller.input_pos], [ax.encoder.pos_estimate]), ['input_pos', 'pos_estimate'])

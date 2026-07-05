@@ -15,19 +15,19 @@ import odrive
 from nicegui import app, ui
 
 from controls import controls
-from theme import apply_theme
+from theme import apply_theme, header
 
 logging.getLogger('nicegui').setLevel(logging.ERROR)
 log = logging.getLogger('odrive_gui')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
-apply_theme()
+dark = apply_theme()
 
 # panels currently rendered, keyed by device serial number; held on a namespace
 # so its truthiness can drive the "waiting…" placeholder via a visibility binding.
 state = SimpleNamespace(devices={})
 
-ui.markdown('## ODrive GUI')
+header(dark)
 ui.markdown('Waiting for ODrive devices to connect…').bind_visibility_from(state, 'devices', backward=lambda d: not d)
 container = ui.row().classes('gap-4 items-stretch')
 
@@ -37,22 +37,41 @@ async def discovery_loop() -> None:
     odrive.start_discovery(odrive.default_usb_search_path)
     while True:
         for device in odrive.connected_devices:
-            if device.serial_number not in state.devices:
-                log.info('Adding ODrive %x', device.serial_number)
+            # controls() does many live reads; if the device leaves the bus mid-build it
+            # raises ObjectLostError. Isolate the per-device body so one failure neither
+            # kills this loop nor leaves a half-built column registered in state.devices
+            # (the serial is only recorded after controls() fully succeeds).
+            try:
+                serial_number = device.serial_number
+                if serial_number in state.devices:
+                    continue
+                log.info('Adding ODrive %x', serial_number)
                 with container:
-                    with ui.column() as state.devices[device.serial_number]:
+                    column = ui.column()
+                try:
+                    with column:
                         controls(device)
+                except Exception:
+                    container.remove(column)  # discard the half-built panel before re-raising
+                    raise
+                state.devices[serial_number] = column
+            except Exception:
+                log.exception('Failed to build ODrive panel (device left the bus mid-enumeration?)')
         for serial_number in list(state.devices):
-            if not any(d.serial_number == serial_number for d in odrive.connected_devices):
+            try:
+                still_connected = any(d.serial_number == serial_number for d in odrive.connected_devices)
+            except Exception:
+                # a device going stale mid-check raises ObjectLostError on the live
+                # serial read; skip this cycle (keep the panel) rather than let it kill
+                # the loop — the next connected_devices_changed retries with a clean read.
+                log.exception('Failed to read connected devices during removal check; retrying next cycle')
+                continue
+            if not still_connected:
                 log.info('Removing ODrive %x', serial_number)
-                column = state.devices.pop(serial_number)
-                # ui.timer does not auto-cancel on element deletion, so the panel's
-                # voltage/power/plot timers would keep polling the lost device. Cancel
-                # them before removing the column.
-                for element in column.descendants():
-                    if isinstance(element, ui.timer):
-                        element.cancel()
-                container.remove(column)
+                # container.remove() deletes the column and all its descendants; NiceGUI
+                # cancels each panel timer on deletion (Timer._handle_delete / _should_stop
+                # checks is_deleted), so no manual timer teardown is needed.
+                container.remove(state.devices.pop(serial_number))
         await asyncio.wrap_future(odrive.connected_devices_changed)
 
 

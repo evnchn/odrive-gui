@@ -15,4 +15,11 @@ def index() -> None:
     build_mock_page()
 
 
+@ui.page('/mode/{mode}')
+def index_with_mode(mode: int) -> None:
+    # same page, but starting in a chosen control mode so tests can render (and click the
+    # buttons of) the torque/velocity/position card that mode makes visible.
+    build_mock_page(control_mode=mode)
+
+
 ui.run()  # intercepted by the NiceGUI test harness; required for the `user` fixture

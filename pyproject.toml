@@ -22,11 +22,10 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "ruff>=0.6",
+    "ruff==0.15.19",  # pinned: single source of truth for the lint/format gate that CI runs
     "mypy>=1.10",
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
-    "pre-commit>=3.7",
 ]
 
 [project.urls]
@@ -50,13 +49,22 @@ docstring-quotes = "double"
 quote-style = "single"
 
 [tool.mypy]
-# matches the CI interpreter; also lets mypy parse modern dependency stubs (numpy).
-python_version = "3.12"
+# Check against the advertised floor (requires-python >= 3.10) so 3.11/3.12-only stdlib
+# usage is caught here — ruff's py310 target only catches 3.11+ *syntax*, not new stdlib APIs.
+python_version = "3.10"
 mypy_path = "src"
 # the GUI talks to a live `fibre` remote object whose attributes are resolved at
 # runtime, so the device side is intentionally dynamically typed.
 ignore_missing_imports = true
 check_untyped_defs = true
+
+# numpy is only a transitive dependency (matplotlib, via ui.line_plot); src never imports it.
+# Its installed stub uses a 3.12 `type` statement mypy can't parse under python_version 3.10,
+# so skip following it rather than raise the whole project's floor for a stub we don't use.
+[[tool.mypy.overrides]]
+module = "numpy.*"
+follow_imports = "skip"
+follow_imports_for_stubs = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

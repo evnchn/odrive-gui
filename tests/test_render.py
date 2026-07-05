@@ -7,9 +7,13 @@ Two layers of safety net, neither of which needs a real ODrive:
   handler fails CI instead of only surfacing when hardware is plugged in.
 """
 
+import types
+
 from mock_odrive import make_mock_odrive
 from nicegui import ui
 from nicegui.testing import User
+
+from controls import _field_value
 
 
 async def test_panel_renders(user: User) -> None:
@@ -28,11 +32,33 @@ async def test_modes_and_gains_present(user: User) -> None:
 
 
 async def test_action_buttons_run_without_error(user: User) -> None:
-    """Click every button so the save/reboot/dump/clear/motion ``on_click`` handlers
-    execute against the mock. The NiceGUI ``user`` fixture fails the test on any ERROR log,
-    so a handler that raises (e.g. a bad arity or attribute) is caught here."""
-    await user.open('/')
-    user.find(ui.button).click()
+    """Fire ``click`` on every button so the save/reboot/dump/clear/motion ``on_click``
+    handlers execute against the mock. The NiceGUI ``user`` fixture fails the test on any
+    ERROR log, and a raising handler is logged via ``app.handle_exception`` — so a bad
+    attribute path, arity or the empty-field ``TypeError`` is caught here.
+
+    Two things this has to get right, both of which silently narrowed the old coverage:
+    - ``.trigger('click')`` fires the event on *all* found buttons; ``.click()`` only
+      dispatches to the single lowest-id element (here the save button), so the motion
+      handlers were never invoked at all under ``.click()``.
+    - ``User.find`` returns only *visible* elements, and each control mode hides two of the
+      three motion cards — so we render every mode in turn, else ``send_torque`` /
+      ``send_position`` stay hidden behind the default velocity mode.
+    (control_mode: 1=torque, 2=velocity, 3=position — see ``MODES`` in controls.py.)"""
+    for mode in (1, 2, 3):
+        await user.open(f'/mode/{mode}')
+        user.find(ui.button).trigger('click')
+
+
+def test_field_value_guards_empty_input() -> None:
+    """The motion-handler safety guard (regression cover): an empty ``ui.number`` reads as
+    ``None`` in NiceGUI 3.x, and ``_field_value`` must map it to ``0.0`` without raising —
+    so ``sign * _field_value(...)`` on the stop button still commands 0 on a spinning motor.
+    The click test can't cover this: its fields default to 0, never the cleared ``None`` case."""
+    assert _field_value(types.SimpleNamespace(value=None)) == 0.0  # empty field → 0, not TypeError
+    assert _field_value(types.SimpleNamespace(value=0)) == 0.0
+    assert _field_value(types.SimpleNamespace(value=5.0)) == 5.0
+    assert _field_value(types.SimpleNamespace(value=-3.5)) == -3.5  # valid negatives pass through
 
 
 def test_mock_mirrors_every_read_path() -> None:
