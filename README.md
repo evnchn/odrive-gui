@@ -7,16 +7,17 @@ It also comes packaged in a Docker image for easy usage.
 
 ## Usage
 
-Install required packages
+This project uses [uv](https://docs.astral.sh/uv/) for dependency management.
+Install the dependencies into a virtual environment:
 
 ```bash
-python3 -m pip install -r requirements.txt
+uv sync
 ```
 
 and start the app:
 
 ```bash
-python3 src/main.py
+uv run python src/main.py
 ```
 
 Or just start the Docker container with

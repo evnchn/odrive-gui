@@ -1,0 +1,24 @@
+[project]
+name = "odrive-gui"
+version = "0.1.0"
+description = "A web-based GUI to tweak and debug the ODrive motor controller"
+readme = "README.md"
+requires-python = ">=3.9"  # src uses PEP 585 builtin generics (dict[int, ...]) as runtime annotations
+license = { text = "MIT" }
+dependencies = [
+    "nicegui>=1.3.13",
+    # <0.6.10: odrive 0.6.10+ dropped the `odrive.pyfibre` / `fibre` API this GUI is built on
+    # (src/controls.py imports `from odrive.pyfibre import fibre`). 0.6.9.post0 is the last release
+    # that still ships it, verified against the PyPI wheels. Open-ended >=0.6.2 resolved to 0.6.11.post0
+    # and crashed the app on startup with `ModuleNotFoundError: No module named 'odrive.pyfibre'`.
+    "odrive>=0.6.2,<0.6.10",
+    "matplotlib>=3.7.2",
+]
+
+[project.urls]
+Homepage = "https://github.com/zauberzeug/odrive-gui"
+
+[tool.uv]
+# the app runs as scripts under src/ (python src/main.py); uv only manages the
+# dependency set, it does not build/install this project as a package.
+package = false

@@ -1,0 +1,40 @@
+name: Check
+
+on: [push, pull_request]
+
+jobs:
+  boot:
+    # Boot the real app against the REAL locked dependency set (no odrive stub / mock).
+    # This is the guard that would have caught odrive 0.6.11 dropping `odrive.pyfibre`:
+    # installing the lock is not enough — the entrypoint must actually import and start.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install libusb (odrive/libfibre runtime dependency)
+        run: sudo apt-get update && sudo apt-get install -y libusb-1.0-0
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Sync the frozen lockfile
+        run: uv sync --frozen
+      - name: Smoke — import the app modules against the locked deps (no stub)
+        run: |
+          uv run python -c "import odrive.pyfibre.fibre; from odrive.utils import dump_errors"
+          uv run python -c "import sys; sys.path.insert(0, 'src'); import controls"
+      - name: Smoke — boot src/main.py and confirm the server answers
+        run: |
+          uv run python src/main.py > boot.log 2>&1 &
+          pid=$!
+          code=000
+          body=""
+          for i in $(seq 1 30); do
+            kill -0 "$pid" 2>/dev/null || { echo "app process exited before binding"; break; }
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/ || true)
+            # capture the page body WHILE the server is still alive (asserted on after we kill it)
+            if [ "$code" = "200" ]; then body=$(curl -s http://localhost:8080/ || true); break; fi
+            sleep 1
+          done
+          echo "--- boot.log ---"; cat boot.log
+          kill "$pid" 2>/dev/null || true
+          test "$code" = "200" || { echo "app did not come up (HTTP $code)"; exit 1; }
+          echo "$body" | grep -q 'ODrive' || { echo "page missing ODrive marker"; exit 1; }
+          echo "OK: app booted and served the page against the real locked deps"
