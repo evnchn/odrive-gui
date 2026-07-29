@@ -18,20 +18,23 @@ the USB bus and renders one live control panel per device.
 ## Run it
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
+uv sync
 
-python src/main.py            # needs a real ODrive on USB
-python tools/run_mock.py      # no hardware — opens on :8113
+uv run python src/main.py            # needs a real ODrive on USB
+uv run python tools/run_mock.py      # no hardware — opens on :8113
 ```
 
 ## Test / lint / type-check (the CI gates)
 
 ```bash
-ruff check . && ruff format --check .
-mypy src
-pytest
+uv run ruff check . && uv run ruff format --check .
+uv run mypy src
+uv run pytest
 ```
+
+Note: `pytest` runs against the odrive **stub** (`tests/conftest.py`), so a green
+suite says nothing about the real `odrive` import. CI's separate `boot` job is what
+verifies `src/main.py` actually starts against the locked dependency set.
 
 ## How the device object works (important)
 

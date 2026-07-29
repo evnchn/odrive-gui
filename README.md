@@ -8,10 +8,17 @@ It also comes packaged in a Docker image for easy usage.
 
 ## Usage
 
+This project uses [uv](https://docs.astral.sh/uv/) for dependency management.
+Install the dependencies into a virtual environment:
+
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e .
-python3 src/main.py
+uv sync
+```
+
+and start the app:
+
+```bash
+uv run python src/main.py
 ```
 
 Then open <http://localhost:8080/>.
@@ -31,16 +38,15 @@ No ODrive on hand? Run the GUI against a built-in **mock device** — useful for
 screenshots and tests with no hardware attached:
 
 ```bash
-pip install -e ".[dev]"
-python3 tools/run_mock.py        # opens on http://localhost:8113/
+uv run python tools/run_mock.py        # opens on http://localhost:8113/
 ```
 
 Run the checks (the same gates as CI):
 
 ```bash
-ruff check . && ruff format --check .
-mypy src
-pytest
+uv run ruff check . && uv run ruff format --check .
+uv run mypy src
+uv run pytest
 ```
 
 The mock and its faithful object graph live in `tools/mock_odrive.py`; see
