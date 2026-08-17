@@ -29,4 +29,6 @@ def header(dark: ui.dark_mode) -> None:
     """
     with ui.header().props('elevated').classes('items-center justify-between px-4 py-2'):
         ui.label('ODrive GUI').classes('text-lg font-medium')
-        ui.toggle(_THEME_OPTIONS).props('outline').bind_value(dark, 'value')
+        # ``toggle-color=white`` keeps the *selected* option readable: the default fills it with
+        # ``primary``, which is invisible on the primary-coloured header.
+        ui.toggle(_THEME_OPTIONS).props('unelevated toggle-color=white toggle-text-color=primary').bind_value(dark, 'value')

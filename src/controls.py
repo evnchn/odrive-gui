@@ -86,7 +86,7 @@ def controls(odrv: Any) -> None:
         for index, axis in enumerate([odrv.axis0, odrv.axis1]):
             if not axis.motor.is_calibrated:
                 continue
-            with ui.card().classes('rounded-xl shadow-md'), ui.column().classes('gap-3'):
+            with ui.card(), ui.column():
                 _create_axis_column(index, axis)
 
 
@@ -105,9 +105,9 @@ def _field_value(field: ui.number) -> float:
 
 def _create_axis_column(index: int, axis: Any) -> None:
     with ui.row().classes('w-full items-center justify-between'):
-        ui.label(f'Axis {index}').classes('text-xl font-semibold')
+        ui.markdown(f'### Axis {index}')
         with ui.row().classes('items-center gap-2'):
-            power = ui.label().classes('text-sm opacity-70')
+            power = ui.label()
             # access via lambda, not `on_click=axis.clear_errors`: the method is optional on
             # older firmware, so it must not be read until the button (if shown) is clicked.
             button = ui.button(on_click=lambda: axis.clear_errors()).props('icon=bug_report flat round dense color=negative').tooltip('Clear errors')
@@ -128,12 +128,12 @@ def _create_axis_column(index: int, axis: Any) -> None:
     trp_cfg = axis.trap_traj.config
 
     with ui.row().classes('gap-2'):
-        mode = ui.toggle(MODES).props('outline').bind_value(ctr_cfg, 'control_mode')
-        ui.toggle(STATES).props('outline').bind_value_to(axis, 'requested_state', forward=lambda x: x or 0).bind_value_from(axis, 'current_state')
+        mode = ui.toggle(MODES).bind_value(ctr_cfg, 'control_mode')
+        ui.toggle(STATES).bind_value_to(axis, 'requested_state', forward=lambda x: x or 0).bind_value_from(axis, 'current_state')
 
     with ui.row().classes('gap-4 items-start'):
         with ui.card().props('flat bordered').bind_visibility_from(mode, 'value', value=1):
-            ui.label('Torque').classes('font-semibold')
+            ui.markdown('**Torque**')
             torque = ui.number('input torque', value=0)
 
             def send_torque(sign: int) -> None:
@@ -145,7 +145,7 @@ def _create_axis_column(index: int, axis: Any) -> None:
                 ui.button(on_click=lambda: send_torque(1)).props('round flat icon=add')
 
         with ui.card().props('flat bordered').bind_visibility_from(mode, 'value', value=2):
-            ui.label('Velocity').classes('font-semibold')
+            ui.markdown('**Velocity**')
             velocity = ui.number('input velocity', value=0)
 
             def send_velocity(sign: int) -> None:
@@ -157,7 +157,7 @@ def _create_axis_column(index: int, axis: Any) -> None:
                 ui.button(on_click=lambda: send_velocity(1)).props('round flat icon=fast_forward')
 
         with ui.card().props('flat bordered').bind_visibility_from(mode, 'value', value=3):
-            ui.label('Position').classes('font-semibold')
+            ui.markdown('**Position**')
             position = ui.number('input position', value=0)
 
             def send_position(sign: int) -> None:
@@ -169,7 +169,7 @@ def _create_axis_column(index: int, axis: Any) -> None:
                 ui.button(on_click=lambda: send_position(1)).props('round flat icon=skip_next')
 
         with ui.column().classes('gap-1'):
-            ui.label('Gains').classes('text-xs uppercase tracking-wide opacity-60')
+            ui.markdown('**Gains**')
             ui.number('pos_gain', format='%.3f').props('outlined dense').bind_value(ctr_cfg, 'pos_gain')
             ui.number('vel_gain', format='%.3f').props('outlined dense').bind_value(ctr_cfg, 'vel_gain')
             ui.number('vel_integrator_gain', format='%.3f').props('outlined dense').bind_value(ctr_cfg, 'vel_integrator_gain')
@@ -177,7 +177,7 @@ def _create_axis_column(index: int, axis: Any) -> None:
                 ui.number('vel_differentiator_gain', format='%.3f').props('outlined dense').bind_value(ctr_cfg, 'vel_differentiator_gain')
 
         with ui.column().classes('gap-1'):
-            ui.label('Limits & bandwidth').classes('text-xs uppercase tracking-wide opacity-60')
+            ui.markdown('**Limits & bandwidth**')
             ui.number('vel_limit', format='%.3f').props('outlined dense').bind_value(ctr_cfg, 'vel_limit')
             ui.number('enc_bandwidth', format='%.3f').props('outlined dense').bind_value(enc_cfg, 'bandwidth')
             ui.number('current_lim', format='%.1f').props('outlined dense').bind_value(mtr_cfg, 'current_lim')
@@ -185,7 +185,7 @@ def _create_axis_column(index: int, axis: Any) -> None:
             ui.number('torque_lim', format='%.1f').props('outlined dense').bind_value(mtr_cfg, 'torque_lim')
             ui.number('requested_cur_range', format='%.1f').props('outlined dense').bind_value(mtr_cfg, 'requested_current_range')
 
-    input_mode = ui.toggle(INPUT_MODES).props('outline').bind_value(ctr_cfg, 'input_mode')
+    input_mode = ui.toggle(INPUT_MODES).bind_value(ctr_cfg, 'input_mode')
     with ui.row().classes('gap-2 items-start'):
         ui.number('inertia', format='%.3f').props('outlined dense').bind_value(ctr_cfg, 'inertia').bind_visibility_from(
             input_mode, 'value', backward=lambda m: m in [2, 3, 5]
@@ -211,9 +211,9 @@ def _create_axis_column(index: int, axis: Any) -> None:
         ui.number('mirror ratio', format='%.3f').props('outlined dense').bind_value(ctr_cfg, 'mirror_ratio').bind_visibility_from(
             input_mode, 'value', value=7
         )
-        ui.toggle({0: 'axis 0', 1: 'axis 1'}).props('outline').bind_value(
-            ctr_cfg, 'axis_to_mirror', forward=lambda x: 255 if x is None else x
-        ).bind_visibility_from(input_mode, 'value', value=7)
+        ui.toggle({0: 'axis 0', 1: 'axis 1'}).bind_value(ctr_cfg, 'axis_to_mirror', forward=lambda x: 255 if x is None else x).bind_visibility_from(
+            input_mode, 'value', value=7
+        )
 
     with ui.expansion('Live plots', icon='show_chart').classes('w-full'):
         _plot(axis, 'Position', lambda ax: ([ax.controller.input_pos], [ax.encoder.pos_estimate]), ['input_pos', 'pos_estimate'])
