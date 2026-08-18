@@ -19,4 +19,4 @@ PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8113
 
 build_mock_page()
 
-ui.run(title='ODrive Motor Tuning (mock)', port=PORT, reload=False, show=False)
+ui.run(title='ODrive Motor Tuning (mock)', favicon='⚙️', port=PORT, reload=False, show=False)

@@ -170,7 +170,7 @@ def build_mock_page(control_mode: int = 2) -> None:
 
     dark = apply_theme()
     header(dark)
-    with ui.row().classes('gap-4 items-stretch'):
+    with ui.column().classes('w-full gap-0'):  # same wrapper as main.py's per-device column
         controls(make_mock_odrive(control_mode=control_mode))
 
 

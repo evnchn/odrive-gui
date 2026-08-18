@@ -28,8 +28,10 @@ dark = apply_theme()
 state = SimpleNamespace(devices={})
 
 header(dark)
-ui.markdown('Waiting for ODrive devices to connect…').bind_visibility_from(state, 'devices', backward=lambda d: not d)
-container = ui.row().classes('gap-4 items-stretch')
+ui.markdown('Waiting for ODrive devices to connect…').classes('p-4').bind_visibility_from(state, 'devices', backward=lambda d: not d)
+# one full-width panel per device, stacked: each starts with its info strip docked
+# under the header (or under the previous device's cards).
+container = ui.column().classes('w-full gap-0')
 
 
 async def discovery_loop() -> None:
@@ -47,7 +49,7 @@ async def discovery_loop() -> None:
                     continue
                 log.info('Adding ODrive %x', serial_number)
                 with container:
-                    column = ui.column()
+                    column = ui.column().classes('w-full gap-0')
                 try:
                     with column:
                         controls(device)
@@ -77,4 +79,4 @@ async def discovery_loop() -> None:
 
 app.on_startup(discovery_loop)
 
-ui.run(title='ODrive Motor Tuning')
+ui.run(title='ODrive Motor Tuning', favicon='⚙️')

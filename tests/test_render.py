@@ -25,7 +25,7 @@ async def test_panel_renders(user: User) -> None:
 
 async def test_modes_and_gains_present(user: User) -> None:
     await user.open('/')
-    await user.should_see('velocity')  # MODES toggle option (CSS uppercases it in the UI)
+    await user.should_see('P-filter')  # INPUT_MODES toggle option
     await user.should_see('pos_gain')
     await user.should_see('current_lim')
     await user.should_see('Live plots')

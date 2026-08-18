@@ -23,26 +23,26 @@ from odrive.utils import dump_errors
 log = logging.getLogger('odrive_gui')
 
 MODES: dict[int, str] = {
-    0: 'voltage',
-    1: 'torque',
-    2: 'velocity',
-    3: 'position',
+    0: 'Voltage',
+    1: 'Torque',
+    2: 'Velocity',
+    3: 'Position',
 }
 
 INPUT_MODES: dict[int, str] = {
-    0: 'inactive',
-    1: 'through',
-    2: 'v-ramp',
-    3: 'p-filter',
-    5: 'trap traj',
-    6: 't-ramp',
-    7: 'mirror',
+    0: 'Inactive',
+    1: 'Through',
+    2: 'V-ramp',
+    3: 'P-filter',
+    5: 'Trap traj',
+    6: 'T-ramp',
+    7: 'Mirror',
 }
 
 STATES: dict[int, str] = {
-    0: 'undefined',
-    1: 'idle',
-    8: 'loop',
+    0: 'Undefined',
+    1: 'Idle',
+    8: 'Loop',
 }
 
 
@@ -66,8 +66,8 @@ def controls(odrv: Any) -> None:
             else:
                 raise
 
-    with ui.row().classes('w-full items-center justify-between gap-4'):
-        with ui.row().classes('items-center gap-2'):
+    with ui.row().classes('w-full items-center justify-between gap-4 gui-strip'):
+        with ui.row().classes('items-center gap-4'):
             _chip(f'SN {hex(serial).removeprefix("0x").upper()}')
             _chip(f'HW {odrv.hw_version_major}.{odrv.hw_version_minor}.{odrv.hw_version_variant}')
             _chip(f'FW {odrv.fw_version_major}.{odrv.fw_version_minor}.{odrv.fw_version_revision}{" (dev)" if odrv.fw_version_unreleased else ""}')
@@ -76,13 +76,13 @@ def controls(odrv: Any) -> None:
         with ui.row().classes('gap-1'):
             # wrap in a lambda (like the original): passing the bare fibre RemoteFunction makes
             # NiceGUI introspect its signature, which is brittle on the C-backed proxy.
-            ui.button(on_click=lambda: odrv.save_configuration()).props('icon=save flat round').tooltip('Save configuration')
-            ui.button(on_click=lambda: dump_errors(odrv, hasattr(odrv, 'clear_errors'))).props('icon=bug_report flat round').tooltip(
+            ui.button(on_click=lambda: odrv.save_configuration()).props('icon=save flat round dense').tooltip('Save configuration')
+            ui.button(on_click=lambda: dump_errors(odrv, hasattr(odrv, 'clear_errors'))).props('icon=bug_report flat round dense').tooltip(
                 'Dump and clear errors'
             )
-            ui.button(on_click=reboot).props('icon=restart_alt flat round').tooltip('Reboot ODrive')
+            ui.button(on_click=reboot).props('icon=restart_alt flat round dense').tooltip('Reboot ODrive')
 
-    with ui.row().classes('gap-4 items-stretch'):
+    with ui.row().classes('gap-4 items-stretch p-4'):
         for index, axis in enumerate([odrv.axis0, odrv.axis1]):
             if not axis.motor.is_calibrated:
                 continue
@@ -90,8 +90,14 @@ def controls(odrv: Any) -> None:
                 _create_axis_column(index, axis)
 
 
+def _toggle(options: dict[int, str]) -> ui.toggle:
+    """A segmented-control style toggle (flat pill in a soft track, see ``theme._CSS``)."""
+    return ui.toggle(options).props('unelevated no-caps')
+
+
 def _chip(text: str) -> ui.label:
-    return ui.label(text).classes('px-2 py-1 rounded bg-slate-500/15 text-sm font-mono')
+    """A device identity value (serial, HW/FW version): plain monospace, no box."""
+    return ui.label(text).classes('text-sm font-mono opacity-80')
 
 
 def _field_value(field: ui.number) -> float:
@@ -105,7 +111,7 @@ def _field_value(field: ui.number) -> float:
 
 def _create_axis_column(index: int, axis: Any) -> None:
     with ui.row().classes('w-full items-center justify-between'):
-        ui.markdown(f'### Axis {index}')
+        ui.label(f'Axis {index}').classes('text-xl font-medium')
         with ui.row().classes('items-center gap-2'):
             power = ui.label()
             # access via lambda, not `on_click=axis.clear_errors`: the method is optional on
@@ -128,42 +134,42 @@ def _create_axis_column(index: int, axis: Any) -> None:
     trp_cfg = axis.trap_traj.config
 
     with ui.row().classes('gap-2'):
-        mode = ui.toggle(MODES).bind_value(ctr_cfg, 'control_mode')
-        ui.toggle(STATES).bind_value_to(axis, 'requested_state', forward=lambda x: x or 0).bind_value_from(axis, 'current_state')
+        mode = _toggle(MODES).bind_value(ctr_cfg, 'control_mode')
+        _toggle(STATES).bind_value_to(axis, 'requested_state', forward=lambda x: x or 0).bind_value_from(axis, 'current_state')
 
     with ui.row().classes('gap-4 items-start'):
-        with ui.card().props('flat bordered').bind_visibility_from(mode, 'value', value=1):
+        with ui.column().classes('gap-1').bind_visibility_from(mode, 'value', value=1):
             ui.markdown('**Torque**')
-            torque = ui.number('input torque', value=0)
+            torque = ui.number('input torque', value=0).props('outlined dense')
 
             def send_torque(sign: int) -> None:
                 axis.controller.input_torque = sign * _field_value(torque)
 
-            with ui.row():
+            with ui.row().classes('w-full justify-around gap-0'):
                 ui.button(on_click=lambda: send_torque(-1)).props('round flat icon=remove')
                 ui.button(on_click=lambda: send_torque(0)).props('round flat icon=radio_button_unchecked')
                 ui.button(on_click=lambda: send_torque(1)).props('round flat icon=add')
 
-        with ui.card().props('flat bordered').bind_visibility_from(mode, 'value', value=2):
+        with ui.column().classes('gap-1').bind_visibility_from(mode, 'value', value=2):
             ui.markdown('**Velocity**')
-            velocity = ui.number('input velocity', value=0)
+            velocity = ui.number('input velocity', value=0).props('outlined dense')
 
             def send_velocity(sign: int) -> None:
                 axis.controller.input_vel = sign * _field_value(velocity)
 
-            with ui.row():
+            with ui.row().classes('w-full justify-around gap-0'):
                 ui.button(on_click=lambda: send_velocity(-1)).props('round flat icon=fast_rewind')
                 ui.button(on_click=lambda: send_velocity(0)).props('round flat icon=stop')
                 ui.button(on_click=lambda: send_velocity(1)).props('round flat icon=fast_forward')
 
-        with ui.card().props('flat bordered').bind_visibility_from(mode, 'value', value=3):
+        with ui.column().classes('gap-1').bind_visibility_from(mode, 'value', value=3):
             ui.markdown('**Position**')
-            position = ui.number('input position', value=0)
+            position = ui.number('input position', value=0).props('outlined dense')
 
             def send_position(sign: int) -> None:
                 axis.controller.input_pos = sign * _field_value(position)
 
-            with ui.row():
+            with ui.row().classes('w-full justify-around gap-0'):
                 ui.button(on_click=lambda: send_position(-1)).props('round flat icon=skip_previous')
                 ui.button(on_click=lambda: send_position(0)).props('round flat icon=exposure_zero')
                 ui.button(on_click=lambda: send_position(1)).props('round flat icon=skip_next')
@@ -185,7 +191,7 @@ def _create_axis_column(index: int, axis: Any) -> None:
             ui.number('torque_lim', format='%.1f').props('outlined dense').bind_value(mtr_cfg, 'torque_lim')
             ui.number('requested_cur_range', format='%.1f').props('outlined dense').bind_value(mtr_cfg, 'requested_current_range')
 
-    input_mode = ui.toggle(INPUT_MODES).bind_value(ctr_cfg, 'input_mode')
+    input_mode = _toggle(INPUT_MODES).bind_value(ctr_cfg, 'input_mode')
     with ui.row().classes('gap-2 items-start'):
         ui.number('inertia', format='%.3f').props('outlined dense').bind_value(ctr_cfg, 'inertia').bind_visibility_from(
             input_mode, 'value', backward=lambda m: m in [2, 3, 5]
@@ -211,7 +217,7 @@ def _create_axis_column(index: int, axis: Any) -> None:
         ui.number('mirror ratio', format='%.3f').props('outlined dense').bind_value(ctr_cfg, 'mirror_ratio').bind_visibility_from(
             input_mode, 'value', value=7
         )
-        ui.toggle({0: 'axis 0', 1: 'axis 1'}).bind_value(ctr_cfg, 'axis_to_mirror', forward=lambda x: 255 if x is None else x).bind_visibility_from(
+        _toggle({0: 'Axis 0', 1: 'Axis 1'}).bind_value(ctr_cfg, 'axis_to_mirror', forward=lambda x: 255 if x is None else x).bind_visibility_from(
             input_mode, 'value', value=7
         )
 
