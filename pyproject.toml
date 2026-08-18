@@ -7,10 +7,11 @@ requires-python = ">=3.10"  # NiceGUI 3.x requires >=3.10
 license = { text = "MIT" }
 dependencies = [
     "nicegui>=3.0",
-    # <0.6.10: odrive 0.6.10+ dropped the `odrive.pyfibre` / `fibre` API this GUI is built on
-    # (src/controls.py imports `from odrive.pyfibre import fibre`). 0.6.9.post0 is the last release
-    # that still ships it, verified against the PyPI wheels. Open-ended >=0.6.2 resolved to 0.6.11.post0
-    # and crashed the app on startup with `ModuleNotFoundError: No module named 'odrive.pyfibre'`.
+    # <0.6.10: odrive 0.6.10+ dropped the fibre-based API this GUI is built on — not only
+    # `odrive.pyfibre` (src/controls.py) but also `odrive.start_discovery` / `connected_devices` /
+    # `connected_devices_changed` (src/main.py's discovery loop), so avoiding the pyfibre import alone
+    # would not unblock newer releases. 0.6.9.post0 is the last release that ships them (verified
+    # against the PyPI wheels; open-ended >=0.6.2 resolved to 0.6.11.post0 and crashed on startup).
     "odrive>=0.6.2,<0.6.10",
     "matplotlib>=3.7.2",
 ]
