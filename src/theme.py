@@ -6,8 +6,14 @@ from nicegui import ui
 
 PRIMARY = '#6e93d6'
 
-# The theme toggle's options -> the value bound onto ``ui.dark_mode`` (None = follow the OS).
-_THEME_OPTIONS = {None: 'Auto', False: 'Light', True: 'Dark'}
+# ``ui.dark_mode`` value -> (icon, label). ``None`` follows the OS setting.
+_THEME_MODES: dict[bool | None, tuple[str, str]] = {
+    None: ('brightness_auto', 'Auto'),
+    False: ('light_mode', 'Light'),
+    True: ('dark_mode', 'Dark'),
+}
+# Clicking the theme button cycles Auto -> Light -> Dark -> Auto.
+_NEXT_THEME_MODE: dict[bool | None, bool | None] = {None: False, False: True, True: None}
 
 
 def apply_theme(dark: bool | None = None) -> ui.dark_mode:
@@ -22,13 +28,23 @@ def apply_theme(dark: bool | None = None) -> ui.dark_mode:
 
 
 def header(dark: ui.dark_mode) -> None:
-    """The page's top app bar: the title plus a Light/Dark/Auto theme toggle.
+    """The page's top app bar: the title plus a single-icon theme toggle.
 
-    Kept compact and shared by the app and the mock runner so both show identical chrome
-    and neither wastes vertical space on a large standalone title.
+    The icon shows the *current* mode (Auto/Light/Dark) and a click cycles to the next
+    one, like the theme button on nicegui.io. Kept compact and shared by the app and
+    the mock runner so both show identical chrome and neither wastes vertical space on
+    a large standalone title.
     """
     with ui.header().props('elevated').classes('items-center justify-between px-4 py-2'):
         ui.label('ODrive GUI').classes('text-lg font-medium')
-        # ``toggle-color=white`` keeps the *selected* option readable: the default fills it with
-        # ``primary``, which is invisible on the primary-coloured header.
-        ui.toggle(_THEME_OPTIONS).props('unelevated toggle-color=white toggle-text-color=primary').bind_value(dark, 'value')
+        button = (
+            ui.button(color=None, on_click=lambda: dark.set_value(_NEXT_THEME_MODE[dark.value]))
+            .props('flat round dense text-color=white')
+            .bind_icon_from(dark, 'value', backward=lambda mode: _THEME_MODES[mode][0])
+        )
+        with button:
+            ui.tooltip().bind_text_from(
+                dark,
+                'value',
+                backward=lambda mode: f'Theme: {_THEME_MODES[mode][1]} — click for {_THEME_MODES[_NEXT_THEME_MODE[mode]][1]}',
+            )
