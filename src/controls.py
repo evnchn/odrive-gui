@@ -73,23 +73,18 @@ def controls(odrv: Any) -> None:
         with ui.row().classes('gap-1'):
             # wrap in a lambda (like the original): passing the bare fibre RemoteFunction makes
             # NiceGUI introspect its signature, which is brittle on the C-backed proxy.
-            ui.button(on_click=lambda: odrv.save_configuration()).props('icon=save flat round dense').tooltip('Save configuration')
-            ui.button(on_click=lambda: dump_errors(odrv, hasattr(odrv, 'clear_errors'))).props('icon=bug_report flat round dense').tooltip(
+            ui.button(icon='save', on_click=lambda: odrv.save_configuration()).props('dense').tooltip('Save configuration')
+            ui.button(icon='bug_report', on_click=lambda: dump_errors(odrv, hasattr(odrv, 'clear_errors'))).props('dense').tooltip(
                 'Dump and clear errors'
             )
-            ui.button(on_click=reboot).props('icon=restart_alt flat round dense').tooltip('Reboot ODrive')
+            ui.button(icon='restart_alt', on_click=reboot).props('dense').tooltip('Reboot ODrive')
 
     with ui.row().classes('gap-4 items-stretch p-4'):
         for index, axis in enumerate([odrv.axis0, odrv.axis1]):
             if not axis.motor.is_calibrated:
                 continue
-            with ui.card(), ui.column():
+            with ui.card().props('flat bordered'), ui.column():
                 _create_axis_column(index, axis)
-
-
-def _toggle(options: dict[int, str]) -> ui.toggle:
-    """A segmented-control style toggle (flat pill in a soft track, see ``theme._CSS``)."""
-    return ui.toggle(options).props('unelevated no-caps')
 
 
 def _chip(text: str) -> ui.label:
@@ -113,7 +108,7 @@ def _create_axis_column(index: int, axis: Any) -> None:
             power = ui.label()
             # access via lambda, not `on_click=axis.clear_errors`: the method is optional on
             # older firmware, so it must not be read until the button (if shown) is clicked.
-            button = ui.button(on_click=lambda: axis.clear_errors()).props('icon=bug_report flat round dense color=negative').tooltip('Clear errors')
+            button = ui.button(icon='bug_report', color='negative', on_click=lambda: axis.clear_errors()).props('dense').tooltip('Clear errors')
             button.set_visibility(hasattr(axis, 'clear_errors'))
 
     def update() -> None:
@@ -131,90 +126,82 @@ def _create_axis_column(index: int, axis: Any) -> None:
     trp_cfg = axis.trap_traj.config
 
     with ui.row().classes('gap-2'):
-        mode = _toggle(MODES).bind_value(ctr_cfg, 'control_mode')
-        _toggle(STATES).bind_value_to(axis, 'requested_state', forward=lambda x: x or 0).bind_value_from(axis, 'current_state')
+        mode = ui.toggle(MODES).bind_value(ctr_cfg, 'control_mode')
+        ui.toggle(STATES).bind_value_to(axis, 'requested_state', forward=lambda x: x or 0).bind_value_from(axis, 'current_state')
 
     with ui.row().classes('gap-4 items-start'):
         with ui.column().classes('gap-1').bind_visibility_from(mode, 'value', value=1):
             ui.markdown('**Torque**')
-            torque = ui.number('input torque', value=0).props('outlined dense')
+            torque = ui.number('input torque', value=0)
 
             def send_torque(sign: int) -> None:
                 axis.controller.input_torque = sign * _field_value(torque)
 
             with ui.row().classes('w-full justify-around gap-0'):
-                ui.button(on_click=lambda: send_torque(-1)).props('round flat icon=remove')
-                ui.button(on_click=lambda: send_torque(0)).props('round flat icon=radio_button_unchecked')
-                ui.button(on_click=lambda: send_torque(1)).props('round flat icon=add')
+                ui.button(icon='remove', on_click=lambda: send_torque(-1))
+                ui.button(icon='radio_button_unchecked', on_click=lambda: send_torque(0))
+                ui.button(icon='add', on_click=lambda: send_torque(1))
 
         with ui.column().classes('gap-1').bind_visibility_from(mode, 'value', value=2):
             ui.markdown('**Velocity**')
-            velocity = ui.number('input velocity', value=0).props('outlined dense')
+            velocity = ui.number('input velocity', value=0)
 
             def send_velocity(sign: int) -> None:
                 axis.controller.input_vel = sign * _field_value(velocity)
 
             with ui.row().classes('w-full justify-around gap-0'):
-                ui.button(on_click=lambda: send_velocity(-1)).props('round flat icon=fast_rewind')
-                ui.button(on_click=lambda: send_velocity(0)).props('round flat icon=stop')
-                ui.button(on_click=lambda: send_velocity(1)).props('round flat icon=fast_forward')
+                ui.button(icon='fast_rewind', on_click=lambda: send_velocity(-1))
+                ui.button(icon='stop', on_click=lambda: send_velocity(0))
+                ui.button(icon='fast_forward', on_click=lambda: send_velocity(1))
 
         with ui.column().classes('gap-1').bind_visibility_from(mode, 'value', value=3):
             ui.markdown('**Position**')
-            position = ui.number('input position', value=0).props('outlined dense')
+            position = ui.number('input position', value=0)
 
             def send_position(sign: int) -> None:
                 axis.controller.input_pos = sign * _field_value(position)
 
             with ui.row().classes('w-full justify-around gap-0'):
-                ui.button(on_click=lambda: send_position(-1)).props('round flat icon=skip_previous')
-                ui.button(on_click=lambda: send_position(0)).props('round flat icon=exposure_zero')
-                ui.button(on_click=lambda: send_position(1)).props('round flat icon=skip_next')
+                ui.button(icon='skip_previous', on_click=lambda: send_position(-1))
+                ui.button(icon='exposure_zero', on_click=lambda: send_position(0))
+                ui.button(icon='skip_next', on_click=lambda: send_position(1))
 
         with ui.column().classes('gap-1'):
             ui.markdown('**Gains**')
-            ui.number('pos_gain', format='%.3f').props('outlined dense').bind_value(ctr_cfg, 'pos_gain')
-            ui.number('vel_gain', format='%.3f').props('outlined dense').bind_value(ctr_cfg, 'vel_gain')
-            ui.number('vel_integrator_gain', format='%.3f').props('outlined dense').bind_value(ctr_cfg, 'vel_integrator_gain')
+            ui.number('pos_gain', format='%.3f').bind_value(ctr_cfg, 'pos_gain')
+            ui.number('vel_gain', format='%.3f').bind_value(ctr_cfg, 'vel_gain')
+            ui.number('vel_integrator_gain', format='%.3f').bind_value(ctr_cfg, 'vel_integrator_gain')
             if hasattr(ctr_cfg, 'vel_differentiator_gain'):
-                ui.number('vel_differentiator_gain', format='%.3f').props('outlined dense').bind_value(ctr_cfg, 'vel_differentiator_gain')
+                ui.number('vel_differentiator_gain', format='%.3f').bind_value(ctr_cfg, 'vel_differentiator_gain')
 
         with ui.column().classes('gap-1'):
             ui.markdown('**Limits & bandwidth**')
-            ui.number('vel_limit', format='%.3f').props('outlined dense').bind_value(ctr_cfg, 'vel_limit')
-            ui.number('enc_bandwidth', format='%.3f').props('outlined dense').bind_value(enc_cfg, 'bandwidth')
-            ui.number('current_lim', format='%.1f').props('outlined dense').bind_value(mtr_cfg, 'current_lim')
-            ui.number('cur_bandwidth', format='%.3f').props('outlined dense').bind_value(mtr_cfg, 'current_control_bandwidth')
-            ui.number('torque_lim', format='%.1f').props('outlined dense').bind_value(mtr_cfg, 'torque_lim')
-            ui.number('requested_cur_range', format='%.1f').props('outlined dense').bind_value(mtr_cfg, 'requested_current_range')
+            ui.number('vel_limit', format='%.3f').bind_value(ctr_cfg, 'vel_limit')
+            ui.number('enc_bandwidth', format='%.3f').bind_value(enc_cfg, 'bandwidth')
+            ui.number('current_lim', format='%.1f').bind_value(mtr_cfg, 'current_lim')
+            ui.number('cur_bandwidth', format='%.3f').bind_value(mtr_cfg, 'current_control_bandwidth')
+            ui.number('torque_lim', format='%.1f').bind_value(mtr_cfg, 'torque_lim')
+            ui.number('requested_cur_range', format='%.1f').bind_value(mtr_cfg, 'requested_current_range')
 
-    input_mode = _toggle(INPUT_MODES).bind_value(ctr_cfg, 'input_mode')
+    input_mode = ui.toggle(INPUT_MODES).bind_value(ctr_cfg, 'input_mode')
     with ui.row().classes('gap-2 items-start'):
-        ui.number('inertia', format='%.3f').props('outlined dense').bind_value(ctr_cfg, 'inertia').bind_visibility_from(
+        ui.number('inertia', format='%.3f').bind_value(ctr_cfg, 'inertia').bind_visibility_from(
             input_mode, 'value', backward=lambda m: m in [2, 3, 5]
         )
-        ui.number('velocity ramp rate', format='%.3f').props('outlined dense').bind_value(ctr_cfg, 'vel_ramp_rate').bind_visibility_from(
-            input_mode, 'value', value=2
-        )
-        ui.number('input filter bandwidth', format='%.3f').props('outlined dense').bind_value(ctr_cfg, 'input_filter_bandwidth').bind_visibility_from(
+        ui.number('velocity ramp rate', format='%.3f').bind_value(ctr_cfg, 'vel_ramp_rate').bind_visibility_from(input_mode, 'value', value=2)
+        ui.number('input filter bandwidth', format='%.3f').bind_value(ctr_cfg, 'input_filter_bandwidth').bind_visibility_from(
             input_mode, 'value', value=3
         )
-        ui.number('trajectory velocity limit', format='%.3f').props('outlined dense').bind_value(trp_cfg, 'vel_limit').bind_visibility_from(
+        ui.number('trajectory velocity limit', format='%.3f').bind_value(trp_cfg, 'vel_limit').bind_visibility_from(input_mode, 'value', value=5)
+        ui.number('trajectory acceleration limit', format='%.3f').bind_value(trp_cfg, 'accel_limit').bind_visibility_from(
             input_mode, 'value', value=5
         )
-        ui.number('trajectory acceleration limit', format='%.3f').props('outlined dense').bind_value(trp_cfg, 'accel_limit').bind_visibility_from(
+        ui.number('trajectory deceleration limit', format='%.3f').bind_value(trp_cfg, 'decel_limit').bind_visibility_from(
             input_mode, 'value', value=5
         )
-        ui.number('trajectory deceleration limit', format='%.3f').props('outlined dense').bind_value(trp_cfg, 'decel_limit').bind_visibility_from(
-            input_mode, 'value', value=5
-        )
-        ui.number('torque ramp rate', format='%.3f').props('outlined dense').bind_value(ctr_cfg, 'torque_ramp_rate').bind_visibility_from(
-            input_mode, 'value', value=6
-        )
-        ui.number('mirror ratio', format='%.3f').props('outlined dense').bind_value(ctr_cfg, 'mirror_ratio').bind_visibility_from(
-            input_mode, 'value', value=7
-        )
-        _toggle({0: 'Axis 0', 1: 'Axis 1'}).bind_value(ctr_cfg, 'axis_to_mirror', forward=lambda x: 255 if x is None else x).bind_visibility_from(
+        ui.number('torque ramp rate', format='%.3f').bind_value(ctr_cfg, 'torque_ramp_rate').bind_visibility_from(input_mode, 'value', value=6)
+        ui.number('mirror ratio', format='%.3f').bind_value(ctr_cfg, 'mirror_ratio').bind_visibility_from(input_mode, 'value', value=7)
+        ui.toggle({0: 'Axis 0', 1: 'Axis 1'}).bind_value(ctr_cfg, 'axis_to_mirror', forward=lambda x: 255 if x is None else x).bind_visibility_from(
             input_mode, 'value', value=7
         )
 

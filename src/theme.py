@@ -10,8 +10,11 @@ PRIMARY = '#6e93d6'
 # primary colour but flat; each device's info strip docks right underneath it as a
 # compact secondary bar; cards sit as plain surfaces on a slightly tinted page
 # background (plus a hairline border); toggles are segmented controls (a pill sliding
-# in a soft grey track). Colours are translucent slate so the same rules work in both
-# light and dark mode.
+# in a soft grey track). Where Quasar has a prop for it (`flat`, `bordered`,
+# `unelevated`, `no-caps`, …) that prop is used — see the default props in
+# apply_theme() and the card in controls.py — and this stylesheet only adds what
+# props cannot express: colours, radii, spacing. Colours are translucent slate so
+# the same rules work in both light and dark mode.
 _CSS = """
 :root {
     --gui-page: #f3f4f6;
@@ -35,11 +38,6 @@ body.body--dark {
 }
 body, body.body--dark {
     background: var(--gui-page);
-}
-
-/* header: flat — the primary colour already separates it from the page */
-.q-header {
-    box-shadow: none;
 }
 
 /* the page content has no outer padding so the device strip can dock to the header;
@@ -66,17 +64,15 @@ body, body.body--dark {
     font-size: 12px;
 }
 
-/* cards: no shadow, soft radius, hairline border */
+/* cards (`flat bordered`): soft radius, hairline border, plain surface */
 .q-card, .q-card--dark {
-    box-shadow: none !important;
     border-radius: 12px;
-    border: 1px solid var(--gui-border);
+    border-color: var(--gui-border);
     background: var(--gui-surface);
 }
 
-/* toggles: segmented control */
+/* toggles (`unelevated no-caps`): segmented control — a pill in a soft track */
 .q-btn-toggle {
-    box-shadow: none !important;
     background: var(--gui-track);
     border-radius: 10px;
     padding: 3px;
@@ -87,10 +83,6 @@ body, body.body--dark {
     min-height: 2em;
     padding: 0 12px;
     font-weight: 500;
-    text-transform: none;
-}
-.q-btn-toggle .q-btn:before {
-    box-shadow: none !important;
 }
 
 /* outlined fields: quieter borders (Quasar's dark-mode border is very bright) */
@@ -123,9 +115,16 @@ def apply_theme(dark: bool | None = None) -> ui.dark_mode:
     ``dark=None`` (default) follows the operating system's light/dark setting; pass
     ``True``/``False`` to force it. The returned ``ui.dark_mode`` can be bound to a
     toggle (see :func:`header`) so the user can override it at runtime.
+
+    Also sets the app-wide default props that make up the flat look, so call sites
+    do not repeat them: every button is a flat round icon button, every number field
+    is outlined and dense, every toggle is a flat segmented control.
     """
     ui.colors(primary=PRIMARY)
     ui.add_css(_CSS)
+    ui.button.default_props('flat round')
+    ui.number.default_props('outlined dense')
+    ui.toggle.default_props('unelevated no-caps')
     return ui.dark_mode(dark)
 
 
@@ -141,7 +140,7 @@ def header(dark: ui.dark_mode) -> None:
         ui.label('ODrive GUI').classes('text-lg font-medium')
         button = (
             ui.button(color=None, on_click=lambda: dark.set_value(_NEXT_THEME_MODE[dark.value]))
-            .props('flat round dense text-color=white')
+            .props('dense text-color=white')
             .bind_icon_from(dark, 'value', backward=lambda mode: _THEME_MODES[mode][0])
         )
         with button:
