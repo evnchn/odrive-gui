@@ -7,9 +7,14 @@ This is the path that silently broke when NiceGUI 3.x turned module-scope UI int
 "script mode" and every browser only ever saw the "Waiting…" placeholder.
 """
 
+import asyncio
+
 import pytest
 from mock_odrive import make_mock_odrive, set_connected_devices
+from nicegui import ui
 from nicegui.testing import User
+
+from controls import STATES
 
 pytestmark = pytest.mark.nicegui_main_file('src/main.py')
 
@@ -47,3 +52,32 @@ async def test_every_client_sees_the_devices(user: User, create_user) -> None:
     other = create_user()
     await other.open('/')
     await other.should_see('SN 3333')
+
+
+async def test_state_toggle_only_writes_user_choices(user: User) -> None:
+    """The axis-state toggle mirrors ``current_state`` but must not echo it back as a
+    request: only a state picked in the UI is written to ``requested_state``."""
+    dev = make_mock_odrive(two_axes=False)  # one axis -> exactly one state toggle on the page
+    axis = dev.axis0
+    axis.current_state = 8  # came up in CLOSED_LOOP_CONTROL
+    axis.requested_state = 'untouched'
+    set_connected_devices([dev])
+    await user.open('/')
+    await user.should_see('Axis 0')
+    await asyncio.sleep(0.3)  # a few binding refresh cycles
+    assert axis.requested_state == 'untouched'  # rendering did not request anything
+
+    state_toggle = next(t for t in user.find(ui.toggle).elements if t.options == STATES)
+    assert state_toggle.value == 8
+    state_toggle.set_value(1)  # the user picks Idle
+    assert axis.requested_state == 1
+
+    axis.requested_state = 'untouched'
+    axis.current_state = 1  # the firmware followed; the toggle mirrors it …
+    await asyncio.sleep(0.3)
+    assert state_toggle.value == 1
+    assert axis.requested_state == 'untouched'  # … without writing it back
+    axis.current_state = 3  # a state the toggle has no option for (calibration) …
+    await asyncio.sleep(0.3)
+    assert state_toggle.value is None
+    assert axis.requested_state == 'untouched'  # … is not written back as 0 either

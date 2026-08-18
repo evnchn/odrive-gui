@@ -17,6 +17,7 @@ from datetime import datetime
 from typing import Any
 
 from nicegui import ui
+from nicegui.events import ValueChangeEventArguments
 from odrive.pyfibre import fibre
 from odrive.utils import dump_errors
 
@@ -125,9 +126,19 @@ def _create_axis_column(index: int, axis: Any) -> None:
     enc_cfg = axis.encoder.config
     trp_cfg = axis.trap_traj.config
 
+    def request_state(e: ValueChangeEventArguments) -> None:
+        # Only a *user* choice becomes a request. The toggle also changes when the
+        # binding below mirrors a new current_state into it (then value == current_state)
+        # or coerces a state outside STATES (calibration, homing) to None — neither may be
+        # written back: a two-way bind did exactly that and e.g. re-requested CLOSED_LOOP
+        # for an axis that came up in it, which makes 0.5.x firmware leave and re-enter
+        # closed loop (a brief disarm of a live motor).
+        if e.value is not None and e.value != axis.current_state:
+            axis.requested_state = e.value
+
     with ui.row().classes('gap-2'):
         mode = ui.toggle(MODES).bind_value(ctr_cfg, 'control_mode')
-        ui.toggle(STATES).bind_value_to(axis, 'requested_state', forward=lambda x: x or 0).bind_value_from(axis, 'current_state')
+        ui.toggle(STATES, on_change=request_state).bind_value_from(axis, 'current_state')
 
     with ui.row().classes('gap-4 items-start'):
         with ui.column().classes('gap-1').bind_visibility_from(mode, 'value', value=1):
