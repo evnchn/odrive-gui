@@ -57,6 +57,16 @@ mypy_path = "src"
 ignore_missing_imports = true
 check_untyped_defs = true
 
+# numpy is only a transitive dependency (matplotlib, via ui.line_plot); src never imports it.
+# On Python 3.12+ its installed stub uses a `type` statement that mypy cannot parse under
+# python_version = "3.10" (`numpy/__init__.pyi: Type statement is only supported in Python 3.12`),
+# so skip following it rather than raise the project's floor for a stub we don't use.
+# (Passes without this on 3.10/3.11 interpreters, which is why it looked redundant once.)
+[[tool.mypy.overrides]]
+module = "numpy.*"
+follow_imports = "skip"
+follow_imports_for_stubs = true
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 pythonpath = ["src", "tools"]
