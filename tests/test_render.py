@@ -2,14 +2,14 @@
 
 Two layers of safety net, neither of which needs a real ODrive:
 - render tests prove the panel *builds* (every widget/binding is constructed);
-- a path test proves the mock mirrors every device attribute the UI *reads*, and a
-  handler test runs every ``on_click`` against the mock, so a broken attribute path or
-  handler fails CI instead of only surfacing when hardware is plugged in.
+- a plot/telemetry test lets the live timers read every device attribute the UI *reads*
+  from the mock, and a handler test runs every ``on_click`` against it, so a broken
+  attribute path or handler fails CI instead of only surfacing when hardware is plugged in.
 """
 
+import asyncio
 import types
 
-from mock_odrive import make_mock_odrive
 from nicegui import ui
 from nicegui.testing import User
 
@@ -61,17 +61,17 @@ def test_field_value_guards_empty_input() -> None:
     assert _field_value(types.SimpleNamespace(value=-3.5)) == -3.5  # valid negatives pass through
 
 
-def test_mock_mirrors_every_read_path() -> None:
-    """The mock must expose every attribute the UI reads (CLAUDE.md mirroring rule), so the
-    plot ``push()`` and telemetry-label paths stay covered without hardware."""
-    dev = make_mock_odrive()
-    assert hasattr(dev, 'clear_errors')  # 0.6.x firmware branch of dump_errors(...)
-    _ = dev.vbus_voltage
-    for axis in (dev.axis0, dev.axis1):
-        cc = axis.motor.current_control
-        _ = cc.Iq_measured * cc.v_current_control_integral_q  # power label
-        _ = cc.Id_setpoint, cc.Id_measured, cc.Iq_setpoint, cc.Iq_measured  # Id/Iq plots
-        _ = axis.controller.input_pos, axis.encoder.pos_estimate  # position plot
-        _ = axis.controller.input_vel, axis.encoder.vel_estimate  # velocity plot
-        _ = axis.motor.fet_thermistor.temperature  # temperature plot
-        _ = axis.error, axis.current_state, axis.requested_state
+async def test_live_plots_and_telemetry_read_the_mock(user: User) -> None:
+    """Enable every plot and let the timers run: the plot samplers and the telemetry
+    labels then read every device path the UI uses against the mock (CLAUDE.md mirroring
+    rule), and the ``user`` fixture fails on the ERROR a broken path would log. Unlike a
+    hand-copied list of paths, this cannot drift from what the UI actually reads."""
+    await user.open('/')
+    checks = user.find(ui.checkbox).elements
+    assert len(checks) == 10  # 5 plots x 2 axes
+    for check in checks:
+        check.set_value(True)
+    await asyncio.sleep(0.3)  # several 20 Hz plot pushes and 10 Hz power-label updates
+    for check in checks:
+        check.set_value(False)
+    await asyncio.sleep(0.1)  # the per-axis plot timers are torn down without error

@@ -13,6 +13,7 @@ hardware-free runs and tests.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
@@ -112,19 +113,22 @@ def _create_axis_column(index: int, axis: Any) -> None:
             button = ui.button(icon='bug_report', color='negative', on_click=lambda: axis.clear_errors()).props('dense').tooltip('Clear errors')
             button.set_visibility(hasattr(axis, 'clear_errors'))
 
-    def update() -> None:
-        if axis.__class__ is fibre.libfibre.EmptyInterface:
-            return
-        cc = axis.motor.current_control
-        power.set_text(f'{cc.Iq_measured * cc.v_current_control_integral_q:.1f} W')
-        button.set_enabled(axis.error != 0)
-
-    ui.timer(0.1, update)
-
     ctr_cfg = axis.controller.config
     mtr_cfg = axis.motor.config
     enc_cfg = axis.encoder.config
     trp_cfg = axis.trap_traj.config
+    cc = axis.motor.current_control
+
+    def update_power() -> None:
+        if axis.__class__ is fibre.libfibre.EmptyInterface:
+            return
+        power.set_text(f'{cc.Iq_measured * cc.v_current_control_integral_q:.1f} W')
+
+    # every property read is a blocking USB round-trip on the event loop, so keep the
+    # 10 Hz path to the two values that must feel live; the error flag only enables a
+    # button and can follow at 1 Hz.
+    ui.timer(0.1, update_power)
+    ui.timer(1.0, lambda: button.set_enabled(axis.error != 0))
 
     def request_state(e: ValueChangeEventArguments) -> None:
         # Only a *user* choice becomes a request. The toggle also changes when the
@@ -141,41 +145,9 @@ def _create_axis_column(index: int, axis: Any) -> None:
         ui.toggle(STATES, on_change=request_state).bind_value_from(axis, 'current_state')
 
     with ui.row().classes('gap-4 items-start'):
-        with ui.column().classes('gap-1').bind_visibility_from(mode, 'value', value=1):
-            ui.markdown('**Torque**')
-            torque = ui.number('input torque', value=0)
-
-            def send_torque(sign: int) -> None:
-                axis.controller.input_torque = sign * _field_value(torque)
-
-            with ui.row().classes('w-full justify-around gap-0'):
-                ui.button(icon='remove', on_click=lambda: send_torque(-1))
-                ui.button(icon='radio_button_unchecked', on_click=lambda: send_torque(0))
-                ui.button(icon='add', on_click=lambda: send_torque(1))
-
-        with ui.column().classes('gap-1').bind_visibility_from(mode, 'value', value=2):
-            ui.markdown('**Velocity**')
-            velocity = ui.number('input velocity', value=0)
-
-            def send_velocity(sign: int) -> None:
-                axis.controller.input_vel = sign * _field_value(velocity)
-
-            with ui.row().classes('w-full justify-around gap-0'):
-                ui.button(icon='fast_rewind', on_click=lambda: send_velocity(-1))
-                ui.button(icon='stop', on_click=lambda: send_velocity(0))
-                ui.button(icon='fast_forward', on_click=lambda: send_velocity(1))
-
-        with ui.column().classes('gap-1').bind_visibility_from(mode, 'value', value=3):
-            ui.markdown('**Position**')
-            position = ui.number('input position', value=0)
-
-            def send_position(sign: int) -> None:
-                axis.controller.input_pos = sign * _field_value(position)
-
-            with ui.row().classes('w-full justify-around gap-0'):
-                ui.button(icon='skip_previous', on_click=lambda: send_position(-1))
-                ui.button(icon='exposure_zero', on_click=lambda: send_position(0))
-                ui.button(icon='skip_next', on_click=lambda: send_position(1))
+        for value, name, attr, icons in _MOTION_INPUTS:
+            with ui.column().classes('gap-1').bind_visibility_from(mode, 'value', value=value):
+                _motion_input(axis, name, attr, icons)
 
         with ui.column().classes('gap-1'):
             ui.markdown('**Gains**')
@@ -203,13 +175,10 @@ def _create_axis_column(index: int, axis: Any) -> None:
         ui.number('input filter bandwidth', format='%.3f').bind_value(ctr_cfg, 'input_filter_bandwidth').bind_visibility_from(
             input_mode, 'value', value=3
         )
-        ui.number('trajectory velocity limit', format='%.3f').bind_value(trp_cfg, 'vel_limit').bind_visibility_from(input_mode, 'value', value=5)
-        ui.number('trajectory acceleration limit', format='%.3f').bind_value(trp_cfg, 'accel_limit').bind_visibility_from(
-            input_mode, 'value', value=5
-        )
-        ui.number('trajectory deceleration limit', format='%.3f').bind_value(trp_cfg, 'decel_limit').bind_visibility_from(
-            input_mode, 'value', value=5
-        )
+        with ui.row().classes('gap-2').bind_visibility_from(input_mode, 'value', value=5):
+            ui.number('trajectory velocity limit', format='%.3f').bind_value(trp_cfg, 'vel_limit')
+            ui.number('trajectory acceleration limit', format='%.3f').bind_value(trp_cfg, 'accel_limit')
+            ui.number('trajectory deceleration limit', format='%.3f').bind_value(trp_cfg, 'decel_limit')
         ui.number('torque ramp rate', format='%.3f').bind_value(ctr_cfg, 'torque_ramp_rate').bind_visibility_from(input_mode, 'value', value=6)
         ui.number('mirror ratio', format='%.3f').bind_value(ctr_cfg, 'mirror_ratio').bind_visibility_from(input_mode, 'value', value=7)
         ui.toggle({0: 'Axis 0', 1: 'Axis 1'}).bind_value(ctr_cfg, 'axis_to_mirror', forward=lambda x: 255 if x is None else x).bind_visibility_from(
@@ -217,27 +186,63 @@ def _create_axis_column(index: int, axis: Any) -> None:
         )
 
     with ui.expansion('Live plots', icon='show_chart').classes('w-full'):
-        _plot(axis, 'Position', lambda ax: ([ax.controller.input_pos], [ax.encoder.pos_estimate]), ['input_pos', 'pos_estimate'])
-        _plot(axis, 'Velocity', lambda ax: ([ax.controller.input_vel], [ax.encoder.vel_estimate]), ['input_vel', 'vel_estimate'])
-        _plot(axis, 'Id', lambda ax: ([ax.motor.current_control.Id_setpoint], [ax.motor.current_control.Id_measured]), ['Id_setpoint', 'Id_measured'])
-        _plot(axis, 'Iq', lambda ax: ([ax.motor.current_control.Iq_setpoint], [ax.motor.current_control.Iq_measured]), ['Iq_setpoint', 'Iq_measured'])
-        _plot(axis, 'Temperature', lambda ax: ([ax.motor.fet_thermistor.temperature],), None)
+        _live_plots(axis)
 
 
-def _plot(axis: Any, name: str, sample: Any, legend: list[str] | None) -> None:
-    """One checkbox-gated live line plot. ``sample(axis)`` returns the per-line value lists.
+# the torque / velocity / position inputs: (control_mode value, label, controller attribute, icons)
+_MOTION_INPUTS: list[tuple[int, str, str, tuple[str, str, str]]] = [
+    (1, 'Torque', 'input_torque', ('remove', 'radio_button_unchecked', 'add')),
+    (2, 'Velocity', 'input_vel', ('fast_rewind', 'stop', 'fast_forward')),
+    (3, 'Position', 'input_pos', ('skip_previous', 'exposure_zero', 'skip_next')),
+]
 
-    The number of lines is taken from ``legend`` (or 1 when there is none) so the
-    device is not read until a timer push actually fires.
-    """
-    check = ui.checkbox(f'{name} plot')
-    plot = ui.line_plot(n=len(legend) if legend else 1, update_every=10)
-    if legend:
-        plot.with_legend(legend, loc='upper left', ncol=2)
+
+def _motion_input(axis: Any, name: str, attr: str, icons: tuple[str, str, str]) -> None:
+    """A labelled number field plus -/0/+ buttons that write ``sign * value`` to ``axis.controller.<attr>``."""
+    ui.markdown(f'**{name}**')
+    field = ui.number(f'input {name.lower()}', value=0)
+
+    def send(sign: int) -> None:
+        setattr(axis.controller, attr, sign * _field_value(field))
+
+    with ui.row().classes('w-full justify-around gap-0'):
+        for icon, sign in zip(icons, (-1, 0, 1), strict=True):
+            ui.button(icon=icon, on_click=lambda sign=sign: send(sign))
+
+
+def _live_plots(axis: Any) -> None:
+    """Checkbox-gated live plots. One 20 Hz timer per axis samples the device for every
+    enabled plot, and it only exists while at least one plot is enabled — an idle
+    NiceGUI timer still wakes every interval, and five per axis added up."""
+    cc = axis.motor.current_control
+    plots: list[tuple[ui.checkbox, ui.line_plot, Callable[[], list[list[float]]]]] = []
+    timer: ui.timer | None = None
 
     def push() -> None:
-        # line_plot uses a datetime x-axis (matplotlib handles it); the stub types x as float.
-        plot.push([datetime.now()], list(sample(axis)))  # type: ignore[list-item]
+        now = datetime.now()
+        for check, plot, sample in plots:
+            if check.value:
+                # line_plot uses a datetime x-axis (matplotlib handles it); the stub types x as float.
+                plot.push([now], sample())  # type: ignore[list-item]
 
-    timer = ui.timer(0.05, push)
-    check.bind_value_to(plot, 'visible').bind_value_to(timer, 'active')
+    def update_timer() -> None:
+        nonlocal timer
+        if any(check.value for check, _, _ in plots):
+            if timer is None:
+                timer = ui.timer(0.05, push)
+        elif timer is not None:
+            timer.cancel()
+            timer.delete()
+            timer = None
+
+    for name, legend, sample in (
+        ('Position', ['input_pos', 'pos_estimate'], lambda: [[axis.controller.input_pos], [axis.encoder.pos_estimate]]),
+        ('Velocity', ['input_vel', 'vel_estimate'], lambda: [[axis.controller.input_vel], [axis.encoder.vel_estimate]]),
+        ('Id', ['Id_setpoint', 'Id_measured'], lambda: [[cc.Id_setpoint], [cc.Id_measured]]),
+        ('Iq', ['Iq_setpoint', 'Iq_measured'], lambda: [[cc.Iq_setpoint], [cc.Iq_measured]]),
+        ('Temperature', ['fet_temperature'], lambda: [[axis.motor.fet_thermistor.temperature]]),
+    ):
+        check = ui.checkbox(f'{name} plot', on_change=update_timer)
+        plot = ui.line_plot(n=len(legend), update_every=10).with_legend(legend, loc='upper left', ncol=2)
+        check.bind_value_to(plot, 'visible')
+        plots.append((check, plot, sample))
