@@ -40,7 +40,7 @@ jobs:
       - name: Build the image
         run: docker build -t odrive-gui:ci .
       - name: Import the app with the image's Python
-        run: docker run --rm --entrypoint /opt/venv/bin/python odrive-gui:ci -c "import odrive, controls"
+        run: docker run --rm --entrypoint /opt/venv/bin/python odrive-gui:ci -c "import main"
 
   check:
     # Lint / type-check / hardware-free tests. These run against the odrive *stub*
