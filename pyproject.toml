@@ -39,8 +39,6 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "Q"]
-# E731: the per-mode send_* one-liner lambdas read clearly inline next to their buttons.
-ignore = ["E731"]
 
 [tool.ruff.lint.flake8-quotes]
 inline-quotes = "single"
@@ -58,14 +56,6 @@ mypy_path = "src"
 # runtime, so the device side is intentionally dynamically typed.
 ignore_missing_imports = true
 check_untyped_defs = true
-
-# numpy is only a transitive dependency (matplotlib, via ui.line_plot); src never imports it.
-# Its installed stub uses a 3.12 `type` statement mypy can't parse under python_version 3.10,
-# so skip following it rather than raise the whole project's floor for a stub we don't use.
-[[tool.mypy.overrides]]
-module = "numpy.*"
-follow_imports = "skip"
-follow_imports_for_stubs = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

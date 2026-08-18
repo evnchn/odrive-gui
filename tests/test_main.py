@@ -81,3 +81,17 @@ async def test_state_toggle_only_writes_user_choices(user: User) -> None:
     await asyncio.sleep(0.3)
     assert state_toggle.value is None
     assert axis.requested_state == 'untouched'  # … is not written back as 0 either
+
+
+async def test_stop_with_cleared_input_field_still_writes_zero(user: User) -> None:
+    """Safety guard: an emptied ``ui.number`` reads as ``None``; the motion buttons must
+    still write ``sign * 0 == 0`` (stop) instead of failing on ``float(None)``."""
+    dev = make_mock_odrive(two_axes=False, control_mode=1)  # torque input visible
+    dev.axis0.controller.input_torque = 'untouched'
+    set_connected_devices([dev])
+    await user.open('/')
+    await user.should_see('input torque')
+    field = next(n for n in user.find(ui.number).elements if n.props['label'] == 'input torque')
+    field.set_value(None)  # the user cleared the box
+    user.find(ui.button).trigger('click')  # includes the torque stop button (visible buttons only)
+    assert dev.axis0.controller.input_torque == 0.0

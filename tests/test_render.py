@@ -8,12 +8,9 @@ Two layers of safety net, neither of which needs a real ODrive:
 """
 
 import asyncio
-import types
 
 from nicegui import ui
 from nicegui.testing import User
-
-from controls import _field_value
 
 
 async def test_panel_renders(user: User) -> None:
@@ -48,17 +45,6 @@ async def test_action_buttons_run_without_error(user: User) -> None:
     for mode in (1, 2, 3):
         await user.open(f'/mode/{mode}')
         user.find(ui.button).trigger('click')
-
-
-def test_field_value_guards_empty_input() -> None:
-    """The motion-handler safety guard (regression cover): an empty ``ui.number`` reads as
-    ``None`` in NiceGUI 3.x, and ``_field_value`` must map it to ``0.0`` without raising —
-    so ``sign * _field_value(...)`` on the stop button still commands 0 on a spinning motor.
-    The click test can't cover this: its fields default to 0, never the cleared ``None`` case."""
-    assert _field_value(types.SimpleNamespace(value=None)) == 0.0  # empty field → 0, not TypeError
-    assert _field_value(types.SimpleNamespace(value=0)) == 0.0
-    assert _field_value(types.SimpleNamespace(value=5.0)) == 5.0
-    assert _field_value(types.SimpleNamespace(value=-3.5)) == -3.5  # valid negatives pass through
 
 
 async def test_live_plots_and_telemetry_read_the_mock(user: User) -> None:

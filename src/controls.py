@@ -95,11 +95,8 @@ def _chip(text: str) -> ui.label:
 
 
 def _field_value(field: ui.number) -> float:
-    """The number field's value as a float, treating an empty field (``None`` in
-    NiceGUI 3.x) as 0. This is a safety guard: without it ``float(None)`` raises and
-    the motion handler aborts — so pressing *stop* (``sign * 0``) on a spinning motor
-    with a cleared input box would fail to write 0 and the motor would keep running.
-    """
+    """The field's value, with an empty field (``None``) read as 0 — so *stop* on a
+    spinning motor still writes 0 even if the input box was cleared."""
     return float(field.value or 0)
 
 
