@@ -7,7 +7,7 @@ collection time makes ``from controls import controls`` work hardware-free.
 """
 
 import pytest
-from mock_odrive import install_odrive_stub, make_mock_odrive
+from mock_odrive import install_odrive_stub, make_mock_odrive, reset_odrive_stub
 
 install_odrive_stub()
 
@@ -19,6 +19,13 @@ collect_ignore = ['app_under_test.py']
 # the lightweight in-process fixtures only — avoids nicegui.testing.plugin pulling
 # in the selenium-based Screen plugin, which we do not use.
 pytest_plugins = ['nicegui.testing.general_fixtures', 'nicegui.testing.user_plugin']
+
+
+@pytest.fixture(autouse=True)
+def _fresh_odrive_stub():
+    # the stub module is process-wide; start every test with no devices and a listener
+    # future that the previous test's (cancelled) discovery loop has not touched.
+    reset_odrive_stub()
 
 
 @pytest.fixture

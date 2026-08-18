@@ -15,6 +15,7 @@ Two entry points:
 
 from __future__ import annotations
 
+import concurrent.futures
 import math
 import sys
 import time
@@ -154,15 +155,15 @@ def make_mock_odrive(serial: int = 0x208E39855253, two_axes: bool = True, contro
 
 
 def build_mock_page(control_mode: int = 2) -> None:
-    """Build the themed dev/test page (header + control panel) for one mock device.
+    """Build a themed test page (header + control panel) for one mock device.
 
-    Shared by ``tools/run_mock.py`` and ``tests/app_under_test.py`` so the dev runner,
-    the screenshots and the render tests all show byte-identical chrome. Imports are
-    local because ``controls``/``theme`` live under ``src`` (on the path at call time)
-    and ``controls`` requires ``install_odrive_stub()`` to have run first.
-
-    ``control_mode`` selects which motion card starts visible (see ``make_mock_odrive``).
+    Used by ``tests/app_under_test.py`` to render the panel in a chosen ``control_mode``
+    (which motion card starts visible, see ``make_mock_odrive``) — something the real
+    entry point cannot be told. The dev runner ``tools/run_mock.py`` runs the real
+    ``src/main.py`` instead. Imports are local because ``controls``/``theme`` live under
+    ``src`` (on the path at call time) and need the odrive stub installed first.
     """
+    install_odrive_stub()
     from nicegui import ui
 
     from controls import controls
@@ -175,13 +176,23 @@ def build_mock_page(control_mode: int = 2) -> None:
 
 
 def install_odrive_stub() -> None:
-    """Register fake ``odrive`` submodules so the app imports without hardware."""
+    """Register fake ``odrive`` submodules so the app imports without hardware.
+
+    Besides the ``fibre``/``utils`` bits ``controls.py`` needs, the stub carries the
+    discovery API ``main.py`` uses (``start_discovery``, ``connected_devices``,
+    ``connected_devices_changed``); see :func:`set_connected_devices` to drive it.
+    """
     if 'odrive' in sys.modules and getattr(sys.modules['odrive'], '_is_mock', False):
         return
     odrive = types.ModuleType('odrive')
     odrive._is_mock = True  # type: ignore[attr-defined]
+    odrive.default_usb_search_path = 'usb'  # type: ignore[attr-defined]
+    odrive.start_discovery = lambda path: None  # type: ignore[attr-defined]
+    odrive.connected_devices = []  # type: ignore[attr-defined]
+    odrive.connected_devices_changed = concurrent.futures.Future()  # type: ignore[attr-defined]
     pyfibre = types.ModuleType('odrive.pyfibre')
     fibre = types.ModuleType('odrive.pyfibre.fibre')
+    fibre.ObjectLostError = type('ObjectLostError', (Exception,), {})  # type: ignore[attr-defined]
     fibre.libfibre = types.SimpleNamespace(EmptyInterface=type('EmptyInterface', (), {}))
     pyfibre.fibre = fibre
     utils = types.ModuleType('odrive.utils')
@@ -196,3 +207,27 @@ def install_odrive_stub() -> None:
             'odrive.utils': utils,
         }
     )
+
+
+def set_connected_devices(devices: list) -> None:
+    """Simulate USB hot-plugging on the stubbed ``odrive`` module.
+
+    Replaces ``odrive.connected_devices`` and fires ``connected_devices_changed`` the way
+    the real package does (a *new* future is installed before the old one resolves), so
+    ``main.discovery_loop`` wakes up and reconciles.
+    """
+    odrive = sys.modules['odrive']
+    assert getattr(odrive, '_is_mock', False), 'install_odrive_stub() must run first'
+    odrive.connected_devices = list(devices)  # type: ignore[attr-defined]
+    signal = odrive.connected_devices_changed  # type: ignore[attr-defined]
+    odrive.connected_devices_changed = concurrent.futures.Future()  # type: ignore[attr-defined]
+    if not signal.done():  # a listener that was cancelled (test teardown) leaves it cancelled
+        signal.set_result(None)
+
+
+def reset_odrive_stub() -> None:
+    """Forget all stub devices and pending listeners (call between tests)."""
+    odrive = sys.modules['odrive']
+    assert getattr(odrive, '_is_mock', False), 'install_odrive_stub() must run first'
+    odrive.connected_devices = []  # type: ignore[attr-defined]
+    odrive.connected_devices_changed = concurrent.futures.Future()  # type: ignore[attr-defined]

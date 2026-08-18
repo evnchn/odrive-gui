@@ -58,13 +58,10 @@ def controls(odrv: Any) -> None:
     def reboot() -> None:
         try:
             odrv.reboot()
-        except Exception as err:
+        except fibre.ObjectLostError:
             # the device drops off the USB bus mid-reboot; that specific loss is expected.
             # do NOT touch `odrv` here — a live read on the just-disconnected device raises again.
-            if type(err).__name__ == 'ObjectLostError':
-                log.info('ODrive %x rebooting (connection dropped as expected)', serial)
-            else:
-                raise
+            log.info('ODrive %x rebooting (connection dropped as expected)', serial)
 
     with ui.row().classes('w-full items-center justify-between gap-4 gui-strip'):
         with ui.row().classes('items-center gap-4'):
