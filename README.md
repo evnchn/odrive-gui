@@ -34,8 +34,8 @@ You can also provide only the device you want to use with `--device=/dev/ttyUSB0
 
 ## Development
 
-No ODrive on hand? Run the GUI against a built-in **mock device** — useful for UI work,
-screenshots and tests with no hardware attached:
+No ODrive on hand?
+Run the GUI against a built-in **mock device** — useful for UI work, screenshots and tests with no hardware attached:
 
 ```bash
 uv run python tools/run_mock.py        # opens on http://localhost:8113/
@@ -49,5 +49,4 @@ uv run mypy src
 uv run pytest
 ```
 
-The mock and its faithful object graph live in `tools/mock_odrive.py`; see
-[`CLAUDE.md`](CLAUDE.md) for the project map and a hardware-safety note.
+The mock and its faithful object graph live in `tools/mock_odrive.py`; see [`CLAUDE.md`](CLAUDE.md) for the project map and a hardware-safety note.
