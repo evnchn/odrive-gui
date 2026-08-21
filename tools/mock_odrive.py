@@ -225,6 +225,16 @@ def set_connected_devices(devices: list) -> None:
         signal.set_result(None)
 
 
+def lose_mock_odrive(device: object) -> None:
+    """Make ``device`` behave like a fibre object whose USB connection was lost.
+
+    Mirrors ``RemoteObject._destroy()``: the instance's class is swapped to
+    ``EmptyInterface``, so every attribute read from now on raises ``AttributeError``.
+    """
+    fibre = sys.modules['odrive.pyfibre.fibre']
+    device.__class__ = fibre.libfibre.EmptyInterface  # type: ignore[attr-defined]
+
+
 def reset_odrive_stub() -> None:
     """Forget all stub devices and pending listeners (call between tests)."""
     odrive = sys.modules['odrive']

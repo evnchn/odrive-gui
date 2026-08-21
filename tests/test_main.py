@@ -10,7 +10,7 @@ This is the path that silently broke when NiceGUI 3.x turned module-scope UI int
 import asyncio
 
 import pytest
-from mock_odrive import make_mock_odrive, set_connected_devices
+from mock_odrive import lose_mock_odrive, make_mock_odrive, set_connected_devices
 from nicegui import ui
 from nicegui.testing import User
 
@@ -41,6 +41,30 @@ async def test_panels_follow_hotplug(user: User) -> None:
     set_connected_devices([])
     await user.should_see('Waiting for ODrive devices to connect')
     await user.should_not_see('SN 1111')
+
+
+async def test_lost_device_drops_only_its_panel(user: User) -> None:
+    """libfibre swaps a lost object's class to ``EmptyInterface`` on its own thread, so a
+    device can turn into one between the registry update and a page render (or between
+    two reads of a panel build). Its reads then raise ``AttributeError``, not
+    ``ObjectLostError``; that must cost only that device's panel, not the page, and
+    must not kill the discovery loop either."""
+    alive, lost = make_mock_odrive(serial=0x1111), make_mock_odrive(serial=0x2222)
+    set_connected_devices([alive, lost])
+    await user.open('/')
+    await user.should_see('SN 2222')
+
+    lose_mock_odrive(lost)  # the registry still lists it, but every read now fails
+    await user.open('/')  # a fresh client renders from the stale registry
+    await user.should_see('SN 1111')
+    await user.should_not_see('SN 2222')
+
+    # the discovery loop reads the serial of every listed device: a lost one is skipped,
+    # the loop survives and still picks up the next hot-plug event
+    set_connected_devices([alive, lost])
+    await asyncio.sleep(0.1)
+    set_connected_devices([alive, make_mock_odrive(serial=0x3333)])
+    await user.should_see('SN 3333')
 
 
 async def test_every_client_sees_the_devices(user: User, create_user) -> None:

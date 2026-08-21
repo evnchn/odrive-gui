@@ -30,6 +30,21 @@ log.setLevel(logging.INFO)
 devices: dict[int, Any] = {}
 
 
+def is_lost(e: Exception) -> bool:
+    """Whether ``e`` means "the device left the bus" rather than a bug in our code.
+
+    fibre reports a loss in two ways: a read that fails on the bus raises
+    ``ObjectLostError``, but once libfibre's lost-object callback has run -- on *its own*
+    thread, so at any point, even between two reads of a synchronous panel build -- the
+    object's class is swapped to ``EmptyInterface`` and every attribute read raises a
+    plain ``AttributeError``. Only an ``AttributeError`` on such a lost object counts;
+    a typo'd attribute path in ``controls()`` still surfaces.
+    """
+    if isinstance(e, fibre.ObjectLostError):
+        return True
+    return isinstance(e, AttributeError) and isinstance(e.obj, fibre.libfibre.EmptyInterface)
+
+
 @ui.refreshable
 def device_panels() -> None:
     """One full-width panel per connected device, or a placeholder if there is none.
@@ -46,7 +61,9 @@ def device_panels() -> None:
         try:
             with column:
                 controls(device)
-        except fibre.ObjectLostError:
+        except Exception as e:
+            if not is_lost(e):
+                raise
             # the device left the bus during the (many) live reads of the build; the next
             # discovery event drops it from the registry and refreshes all clients.
             log.info('ODrive %x left the bus while building its panel', serial)
@@ -71,8 +88,10 @@ async def discovery_loop() -> None:
         for device in list(odrive.connected_devices):  # snapshot: mutated from the fibre thread
             try:
                 connected[device.serial_number] = device
-            except fibre.ObjectLostError:
-                pass  # went away between the scan and the read; the next event catches up
+            except Exception as e:
+                if not is_lost(e):
+                    raise
+                # went away between the scan and the read; the next event catches up
         if [(s, id(d)) for s, d in connected.items()] != [(s, id(d)) for s, d in devices.items()]:
             for serial in devices.keys() - connected.keys():
                 log.info('Removing ODrive %x', serial)

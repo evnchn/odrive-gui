@@ -48,6 +48,16 @@ STATES: dict[int, str] = {
 }
 
 
+def _lost(obj: Any) -> bool:
+    """Whether fibre has already torn ``obj`` down (its USB connection was lost).
+
+    libfibre swaps a lost object's class to ``EmptyInterface`` on its own thread, after
+    which every attribute read raises ``AttributeError``. The panel's timers can fire in
+    the short window before the discovery loop deletes the panel, so they check first.
+    """
+    return obj.__class__ is fibre.libfibre.EmptyInterface
+
+
 def controls(odrv: Any) -> None:
     """Render the control panel for a single connected ODrive device."""
 
@@ -71,7 +81,7 @@ def controls(odrv: Any) -> None:
             _chip(f'HW {odrv.hw_version_major}.{odrv.hw_version_minor}.{odrv.hw_version_variant}')
             _chip(f'FW {odrv.fw_version_major}.{odrv.fw_version_minor}.{odrv.fw_version_revision}{" (dev)" if odrv.fw_version_unreleased else ""}')
             voltage = ui.label().classes('text-lg font-medium text-primary')
-            ui.timer(1.0, lambda: voltage.set_text(f'{odrv.vbus_voltage:.2f} V'))
+            ui.timer(1.0, lambda: _lost(odrv) or voltage.set_text(f'{odrv.vbus_voltage:.2f} V'))
         with ui.row().classes('gap-1'):
             # wrap in a lambda (like the original): passing the bare fibre RemoteFunction makes
             # NiceGUI introspect its signature, which is brittle on the C-backed proxy.
@@ -117,7 +127,7 @@ def _create_axis_column(index: int, axis: Any) -> None:
     cc = axis.motor.current_control
 
     def update_power() -> None:
-        if axis.__class__ is fibre.libfibre.EmptyInterface:
+        if _lost(axis):
             return
         power.set_text(f'{cc.Iq_measured * cc.v_current_control_integral_q:.1f} W')
 
@@ -125,7 +135,7 @@ def _create_axis_column(index: int, axis: Any) -> None:
     # 10 Hz path to the two values that must feel live; the error flag only enables a
     # button and can follow at 1 Hz.
     ui.timer(0.1, update_power)
-    ui.timer(1.0, lambda: button.set_enabled(axis.error != 0))
+    ui.timer(1.0, lambda: _lost(axis) or button.set_enabled(axis.error != 0))
 
     def request_state(e: ValueChangeEventArguments) -> None:
         # Only a *user* choice becomes a request. The toggle also changes when the
