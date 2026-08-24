@@ -1,15 +1,11 @@
 {
-  "editor.defaultFormatter": "esbenp.prettier-vscode",
   "editor.formatOnSave": true,
   "editor.minimap.enabled": false,
-  "isort.args": ["--line-length", "120"],
-  "prettier.printWidth": 120,
-  "python.formatting.provider": "autopep8",
-  "python.formatting.autopep8Args": ["--max-line-length", "150", "--experimental"],
   "[python]": {
-    "editor.defaultFormatter": "ms-python.python",
+    "editor.defaultFormatter": "charliermarsh.ruff",
     "editor.codeActionsOnSave": {
-      "source.organizeImports": true
+      "source.organizeImports.ruff": "explicit",
+      "source.fixAll.ruff": "explicit"
     }
   }
 }

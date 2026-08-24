@@ -7,34 +7,57 @@ jobs:
     # Boot the real app against the REAL locked dependency set (no odrive stub / mock).
     # This is the guard that would have caught odrive 0.6.11 dropping `odrive.pyfibre`:
     # installing the lock is not enough — the entrypoint must actually import and start.
+    # (Whether the page then shows device panels is covered hardware-free by
+    # tests/test_main.py in the `check` job below.)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install libusb (odrive/libfibre runtime dependency)
         run: sudo apt-get update && sudo apt-get install -y libusb-1.0-0
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v10.0.1
       - name: Sync the frozen lockfile
         run: uv sync --frozen
-      - name: Smoke — import the app modules against the locked deps (no stub)
-        run: |
-          uv run python -c "import odrive.pyfibre.fibre; from odrive.utils import dump_errors"
-          uv run python -c "import sys; sys.path.insert(0, 'src'); import controls"
-      - name: Smoke — boot src/main.py and confirm the server answers
+      - name: Boot src/main.py and confirm it serves the page
         run: |
           uv run python src/main.py > boot.log 2>&1 &
           pid=$!
-          code=000
-          body=""
-          for i in $(seq 1 30); do
-            kill -0 "$pid" 2>/dev/null || { echo "app process exited before binding"; break; }
-            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/ || true)
-            # capture the page body WHILE the server is still alive (asserted on after we kill it)
-            if [ "$code" = "200" ]; then body=$(curl -s http://localhost:8080/ || true); break; fi
-            sleep 1
-          done
+          # the page function renders this placeholder when no ODrive is attached, so seeing
+          # it proves the app imported, started and ran its page — not just that a port opened
+          if curl -sSf --retry 30 --retry-delay 1 --retry-connrefused --retry-all-errors http://localhost:8080/ \
+              | grep -q 'Waiting for ODrive devices to connect'; then ok=0; else ok=1; fi
           echo "--- boot.log ---"; cat boot.log
           kill "$pid" 2>/dev/null || true
-          test "$code" = "200" || { echo "app did not come up (HTTP $code)"; exit 1; }
-          echo "$body" | grep -q 'ODrive' || { echo "page missing ODrive marker"; exit 1; }
-          echo "OK: app booted and served the page against the real locked deps"
+          exit $ok
+
+  docker:
+    # Build the image publish.yml would push and make sure the app imports with the
+    # interpreter the base image actually runs (`uv pip install --system` once put the
+    # deps into the wrong Python and the published image died at `import odrive`).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build the image
+        run: docker build -t odrive-gui:ci .
+      - name: Import the app with the image's Python
+        run: docker run --rm --entrypoint /opt/venv/bin/python odrive-gui:ci -c "import main"
+
+  check:
+    # Lint / type-check / hardware-free tests. These run against the odrive *stub*
+    # (tests/conftest.py), so they can never catch a broken real import — that is the
+    # `boot` job's job above. Both are required.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.1
+      - name: Sync the frozen lockfile
+        run: uv sync --frozen
+      - name: Ruff
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+      - name: Mypy
+        run: uv run mypy src
+      - name: Pytest
+        run: uv run pytest -q
