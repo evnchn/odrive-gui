@@ -241,3 +241,21 @@ def reset_odrive_stub() -> None:
     assert getattr(odrive, '_is_mock', False), 'install_odrive_stub() must run first'
     odrive.connected_devices = []  # type: ignore[attr-defined]
     odrive.connected_devices_changed = concurrent.futures.Future()  # type: ignore[attr-defined]
+
+
+def arrive_mid_scan(during: object, arriving: object) -> None:
+    """Hot-plug ``arriving`` while the discovery loop reads ``during``'s serial number.
+
+    That read happens *inside* the scan — the window in which the real ``odrive`` installs a
+    fresh ``connected_devices_changed`` before resolving the old one. A loop that reads the
+    attribute after scanning therefore awaits the replacement and never wakes up.
+    Patches the class, which ``make_mock_odrive`` builds fresh per device.
+    """
+    serial = during.serial_number
+
+    def read_once(self) -> int:
+        type(self).serial_number = serial  # fire on the first read only
+        set_connected_devices([during, arriving])
+        return serial
+
+    type(during).serial_number = property(read_once)  # type: ignore[misc]
