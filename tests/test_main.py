@@ -49,11 +49,12 @@ async def test_device_arriving_during_the_scan_is_not_missed(user: User) -> None
     holds. Unless the loop captured the signal before scanning, that wake-up is lost: the
     loop awaits the replacement forever and the second panel never appears."""
     first = make_mock_odrive(serial=0x1111)
-    arrive_mid_scan(first, make_mock_odrive(serial=0x2222))
+    trap = arrive_mid_scan(first, make_mock_odrive(serial=0x2222))
     set_connected_devices([first])  # wakes the loop, which then plugs 2222 in mid-scan
     await user.open('/')
     await user.should_see('SN 2222')
     await user.should_see('SN 1111')
+    assert trap['fired_mid_scan']  # it really raced the scan, not an ordinary hot-plug
 
 
 async def test_lost_device_drops_only_its_panel(user: User) -> None:
