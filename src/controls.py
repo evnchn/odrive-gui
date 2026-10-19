@@ -12,12 +12,15 @@ hardware-free runs and tests.
 
 from __future__ import annotations
 
+import asyncio
+import itertools
 import logging
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any
 
-from nicegui import ui
+from nicegui import background_tasks, ui
 from nicegui.events import ValueChangeEventArguments
 from odrive.pyfibre import fibre
 from odrive.utils import dump_errors
@@ -58,6 +61,55 @@ def _lost(obj: Any) -> bool:
     return obj.__class__ is fibre.libfibre.EmptyInterface
 
 
+# Every device read or write is a blocking USB round-trip. Steady-state traffic runs on this
+# one worker, so the event loop never waits for the bus and device calls never overlap.
+_usb = ThreadPoolExecutor(max_workers=1, thread_name_prefix='odrive-usb')
+_write_order = itertools.count()
+
+
+async def _on_usb(obj: Any, fn: Callable[[], Any]) -> Any:
+    """``fn()`` on the USB worker; ``None`` if ``obj``'s device left the bus meanwhile."""
+    try:
+        return await asyncio.get_running_loop().run_in_executor(_usb, fn)
+    except Exception as e:
+        if isinstance(e, fibre.ObjectLostError) or _lost(obj):
+            return None
+        raise
+
+
+class _Mirror:
+    """A local copy of the attributes widgets bind to on one fibre object.
+
+    NiceGUI cannot be notified by a fibre object, so it polls every bound attribute each
+    0.1 s -- on the event loop. Widgets bind to this mirror instead: reading it is free,
+    ``sync()`` refreshes it on the USB worker, and a widget's change is written through there.
+    """
+
+    def __init__(self, obj: Any) -> None:
+        object.__setattr__(self, '_obj', obj)
+        object.__setattr__(self, '_values', {})
+        object.__setattr__(self, '_written', {})  # name -> _write_order of its last write
+
+    def __getattr__(self, name: str) -> Any:
+        if name not in self._values:
+            self._values[name] = getattr(self._obj, name)  # first read, while building the panel
+        return self._values[name]
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        self._values[name] = value
+        self._written[name] = next(_write_order)
+        background_tasks.create(_on_usb(self._obj, lambda: setattr(self._obj, name, value)))
+
+    async def sync(self) -> None:
+        names = list(self._values)
+        start = next(_write_order)
+        values = await _on_usb(self._obj, lambda: [getattr(self._obj, name) for name in names])
+        for name, value in zip(names, values or [], strict=False):
+            # a write queued after this read started is newer than what the read saw
+            if self._written.get(name, -1) < start:
+                self._values[name] = value
+
+
 def controls(odrv: Any) -> None:
     """Render the control panel for a single connected ODrive device."""
 
@@ -81,7 +133,12 @@ def controls(odrv: Any) -> None:
             _chip(f'HW {odrv.hw_version_major}.{odrv.hw_version_minor}.{odrv.hw_version_variant}')
             _chip(f'FW {odrv.fw_version_major}.{odrv.fw_version_minor}.{odrv.fw_version_revision}{" (dev)" if odrv.fw_version_unreleased else ""}')
             voltage = ui.label().classes('text-lg font-medium text-primary')
-            ui.timer(1.0, lambda: _lost(odrv) or voltage.set_text(f'{odrv.vbus_voltage:.2f} V'))
+
+            async def update_voltage() -> None:
+                if (vbus := await _on_usb(odrv, lambda: odrv.vbus_voltage)) is not None:
+                    voltage.set_text(f'{vbus:.2f} V')
+
+            ui.timer(1.0, update_voltage)
         with ui.row().classes('gap-1'):
             # wrap in a lambda (like the original): passing the bare fibre RemoteFunction makes
             # NiceGUI introspect its signature, which is brittle on the C-backed proxy.
@@ -120,22 +177,27 @@ def _create_axis_column(index: int, axis: Any) -> None:
             button = ui.button(icon='bug_report', color='negative', on_click=lambda: axis.clear_errors()).props('dense').tooltip('Clear errors')
             button.set_visibility(hasattr(axis, 'clear_errors'))
 
-    ctr_cfg = axis.controller.config
-    mtr_cfg = axis.motor.config
-    enc_cfg = axis.encoder.config
-    trp_cfg = axis.trap_traj.config
+    mirrors = [_Mirror(obj) for obj in (axis, axis.controller.config, axis.motor.config, axis.encoder.config, axis.trap_traj.config)]
+    axis_state, ctr_cfg, mtr_cfg, enc_cfg, trp_cfg = mirrors
     cc = axis.motor.current_control
 
-    def update_power() -> None:
-        if _lost(axis):
-            return
-        power.set_text(f'{cc.Iq_measured * cc.v_current_control_integral_q:.1f} W')
+    async def sync_mirrors() -> None:
+        for mirror in mirrors:
+            await mirror.sync()
 
-    # every property read is a blocking USB round-trip on the event loop, so keep the
-    # 10 Hz path to the two values that must feel live; the error flag only enables a
-    # button and can follow at 1 Hz.
+    async def update_power() -> None:
+        if (watts := await _on_usb(axis, lambda: cc.Iq_measured * cc.v_current_control_integral_q)) is not None:
+            power.set_text(f'{watts:.1f} W')
+
+    async def update_error() -> None:
+        if (error := await _on_usb(axis, lambda: axis.error)) is not None:
+            button.set_enabled(error != 0)
+
+    # every property read is a USB round-trip, so keep the 10 Hz path to the two values
+    # that must feel live; the error flag only enables a button and can follow at 1 Hz.
     ui.timer(0.1, update_power)
-    ui.timer(1.0, lambda: _lost(axis) or button.set_enabled(axis.error != 0))
+    ui.timer(0.1, sync_mirrors)
+    ui.timer(1.0, update_error)
 
     def request_state(e: ValueChangeEventArguments) -> None:
         # Only a *user* choice becomes a request. The toggle also changes when the
@@ -144,12 +206,12 @@ def _create_axis_column(index: int, axis: Any) -> None:
         # written back: a two-way bind did exactly that and e.g. re-requested CLOSED_LOOP
         # for an axis that came up in it, which makes 0.5.x firmware leave and re-enter
         # closed loop (a brief disarm of a live motor).
-        if e.value is not None and e.value != axis.current_state:
+        if e.value is not None and e.value != axis_state.current_state:
             axis.requested_state = e.value
 
     with ui.row().classes('gap-2'):
         mode = ui.toggle(MODES).bind_value(ctr_cfg, 'control_mode')
-        ui.toggle(STATES, on_change=request_state).bind_value_from(axis, 'current_state')
+        ui.toggle(STATES, on_change=request_state).bind_value_from(axis_state, 'current_state')
 
     with ui.row().classes('gap-4 items-start'):
         for value, name, attr, icons in _MOTION_INPUTS:
@@ -225,12 +287,13 @@ def _live_plots(axis: Any) -> None:
     plots: list[tuple[ui.checkbox, ui.line_plot, Callable[[], list[list[float]]]]] = []
     timer: ui.timer | None = None
 
-    def push() -> None:
+    async def push() -> None:
         now = datetime.now()
-        for check, plot, sample in plots:
-            if check.value:
-                # line_plot uses a datetime x-axis (matplotlib handles it); the stub types x as float.
-                plot.push([now], sample())  # type: ignore[list-item]
+        shown = [(plot, sample) for check, plot, sample in plots if check.value]
+        samples = await _on_usb(axis, lambda: [sample() for _, sample in shown])
+        for (plot, _), values in zip(shown, samples or [], strict=False):
+            # line_plot uses a datetime x-axis (matplotlib handles it); the stub types x as float.
+            plot.push([now], values)  # type: ignore[list-item]
 
     def update_timer() -> None:
         nonlocal timer

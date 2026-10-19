@@ -133,3 +133,24 @@ async def test_stop_with_cleared_input_field_still_writes_zero(user: User) -> No
     field.set_value(None)  # the user cleared the box
     user.find(ui.button).trigger('click')  # includes the torque stop button (visible buttons only)
     assert dev.axis0.controller.input_torque == 0.0
+
+
+async def test_gain_edits_reach_the_device_and_device_changes_reach_the_ui(user: User) -> None:
+    """The widgets bind to local mirrors, so both directions must still get through: an
+    edit is written to the device (and not undone by a refresh that read the old value
+    in the meantime), and a change made on the device shows up in the UI."""
+    device = make_mock_odrive(two_axes=False)  # one axis -> exactly one pos_gain field
+    set_connected_devices([device])
+    await user.open('/')
+    await user.should_see('pos_gain')
+    field = next(n for n in user.find(ui.number).elements if n.props.get('label') == 'pos_gain')
+    config = device.axis0.controller.config
+
+    field.set_value(42.0)
+    await asyncio.sleep(1.2)
+    assert config.pos_gain == 42.0
+    assert field.value == 42.0
+
+    config.pos_gain = 7.0  # changed behind the UI's back (odrivetool, another client)
+    await asyncio.sleep(1.2)
+    assert field.value == 7.0
