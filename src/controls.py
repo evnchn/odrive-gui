@@ -15,14 +15,12 @@ from __future__ import annotations
 import asyncio
 import itertools
 import logging
-import time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 from typing import Any
 
 from nicegui import ui
-from nicegui.events import GenericEventArguments
 from odrive.pyfibre import fibre
 from odrive.utils import dump_errors
 
@@ -198,21 +196,10 @@ def _create_axis_column(index: int, axis: Any) -> None:
     axis_state, ctr_cfg, mtr_cfg, enc_cfg, trp_cfg = mirrors
     cc = axis.motor.current_control
 
-    # the state the user last picked and until when the toggle keeps showing it: a refresh
-    # may read the old state before the firmware has switched, and showing that would make
-    # a click back to it a no-op (the browser drops clicks on the button already shown)
-    pending: tuple[int, float] | None = None
-
     async def sync_mirrors() -> None:
-        nonlocal pending
         for mirror in mirrors:
             await mirror.sync()
-        state = axis_state.current_state
-        if pending is not None:
-            if state != pending[0] and time.monotonic() < pending[1]:
-                return
-            pending = None
-        state_toggle.set_value(state if state in STATES else None)
+        show_state(axis_state.current_state)
 
     async def update_power() -> None:
         if (watts := await _on_usb(axis, lambda: cc.Iq_measured * cc.v_current_control_integral_q)) is not None:
@@ -228,24 +215,33 @@ def _create_axis_column(index: int, axis: Any) -> None:
     ui.timer(0.1, sync_mirrors)
     ui.timer(1.0, update_error)
 
-    def request_state(e: GenericEventArguments) -> None:
-        # A state is requested only when the user clicks one, so this listens to the
-        # browser's own event instead of the toggle's value changes. Those also fire when
-        # sync_mirrors() shows the device's state (writing that back re-requested e.g.
-        # CLOSED_LOOP for an axis already in it, which makes 0.5.x firmware leave and
-        # re-enter closed loop: a brief disarm of a live motor), and they skip a click on
-        # the value the server already holds -- which, while the device state shown is a
-        # refresh old, can be a click on Idle that has to go through.
-        if e.args is not None:
-            nonlocal pending
-            state = list(STATES)[e.args]
-            pending = (state, time.monotonic() + 2.0)
-            _send(axis, lambda: setattr(axis, 'requested_state', state))
+    def request_state(state: int) -> None:
+        _send(axis, lambda: setattr(axis, 'requested_state', state))
+
+    # The axis state is one button per state, not a toggle: every click must reach the
+    # device, but a toggle drops a click on the option it already shows -- and the state
+    # shown can be a refresh old (the firmware has not switched yet), so that click can be
+    # the Idle that stops a motor. A toggle's value changes are no better a trigger: they
+    # also fire when a refresh shows the device's state, and writing that back re-requested
+    # e.g. CLOSED_LOOP for an axis already in it, which makes 0.5.x firmware leave and
+    # re-enter closed loop (a brief disarm of a live motor). So clicks request, refreshes show.
+    state_buttons: dict[int, ui.button] = {}
+    shown: list[int | None] = [None]
+
+    def show_state(state: int) -> None:
+        if state == shown[0]:
+            return
+        shown[0] = state
+        for value, state_button in state_buttons.items():
+            state_button.props(remove='flat unelevated color')
+            state_button.props('unelevated color=primary' if value == state else 'flat')
 
     with ui.row().classes('gap-2'):
         mode = ui.toggle(MODES).bind_value(ctr_cfg, 'control_mode')
-        state_toggle = ui.toggle(STATES, value=state if (state := axis_state.current_state) in STATES else None)
-        state_toggle.on('update:model-value', request_state, [None])  # the value only, as NiceGUI's own listener
+        with ui.element('div').classes('q-btn-toggle row no-wrap inline'):
+            for value, label in STATES.items():
+                state_buttons[value] = ui.button(label, on_click=lambda value=value: request_state(value)).props(remove='round').props('no-caps')
+        show_state(axis_state.current_state)
 
     with ui.row().classes('gap-4 items-start'):
         for value, name, attr, icons in _MOTION_INPUTS:

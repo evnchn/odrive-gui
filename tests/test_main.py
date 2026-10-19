@@ -14,14 +14,22 @@ import pytest
 from mock_odrive import arrive_mid_scan, lose_mock_odrive, make_mock_odrive, set_connected_devices
 from nicegui import ui
 from nicegui.testing import User
-from nicegui.testing.user_interaction import UserInteraction
 
 from controls import STATES, _usb
 
 
-def pick(user: User, toggle: ui.toggle, state: int) -> None:
-    """Click ``state`` on the axis-state toggle, as the browser reports it."""
-    UserInteraction(user, {toggle}, None).trigger('update:modelValue', list(STATES).index(state))
+def state_buttons(user: User) -> dict[int, ui.button]:
+    return {state: user.find(kind=ui.button, content=label).elements.pop() for state, label in STATES.items()}
+
+
+def pick(user: User, state: int) -> None:
+    """Click the axis-state button for ``state``."""
+    user.find(kind=ui.button, content=STATES[state]).click()
+
+
+def shown_state(user: User) -> int | None:
+    """The state the axis-state buttons highlight."""
+    return next((state for state, button in state_buttons(user).items() if button.props.get('color') == 'primary'), None)
 
 
 async def drain() -> None:
@@ -105,34 +113,33 @@ async def test_every_client_sees_the_devices(user: User, create_user) -> None:
     await other.should_see('SN 3333')
 
 
-async def test_state_toggle_only_writes_user_choices(user: User) -> None:
-    """The axis-state toggle mirrors ``current_state`` but must not echo it back as a
-    request: only a state picked in the UI is written to ``requested_state``."""
-    dev = make_mock_odrive(two_axes=False)  # one axis -> exactly one state toggle on the page
+async def test_state_buttons_show_the_device_state_and_only_clicks_request_one(user: User) -> None:
+    """The highlighted state follows ``current_state``, but only a click writes
+    ``requested_state`` -- a refresh never echoes the device's state back as a request."""
+    dev = make_mock_odrive(two_axes=False)  # one axis -> exactly one set of state buttons
     axis = dev.axis0
     axis.current_state = 8  # came up in CLOSED_LOOP_CONTROL
     axis.requested_state = 'untouched'
     set_connected_devices([dev])
     await user.open('/')
     await user.should_see('Axis 0')
-    await asyncio.sleep(0.3)  # a few binding refresh cycles
+    await asyncio.sleep(0.3)  # a few refreshes
     assert axis.requested_state == 'untouched'  # rendering did not request anything
+    assert shown_state(user) == 8
 
-    state_toggle = next(t for t in user.find(ui.toggle).elements if t.options == STATES)
-    assert state_toggle.value == 8
-    pick(user, state_toggle, 1)  # the user picks Idle
+    pick(user, 1)  # the user clicks Idle
     await drain()
     assert axis.requested_state == 1
 
     axis.requested_state = 'untouched'
-    axis.current_state = 1  # the firmware followed; the toggle mirrors it …
+    axis.current_state = 1  # the firmware followed; the buttons show it …
     await asyncio.sleep(0.3)
-    assert state_toggle.value == 1
+    assert shown_state(user) == 1
     assert axis.requested_state == 'untouched'  # … without writing it back
-    axis.current_state = 3  # a state the toggle has no option for (calibration) …
+    axis.current_state = 3  # a state without a button (calibration) …
     await asyncio.sleep(0.3)
-    assert state_toggle.value is None
-    assert axis.requested_state == 'untouched'  # … is not written back as 0 either
+    assert shown_state(user) is None
+    assert axis.requested_state == 'untouched'  # … is not written back either
 
 
 async def test_stop_with_cleared_input_field_still_writes_zero(user: User) -> None:
@@ -189,19 +196,16 @@ def _record_state_requests(axis, follow: bool = True) -> list[tuple[int, float]]
 
 
 async def test_a_quick_loop_then_idle_is_not_dropped(user: User) -> None:
-    """The toggle's cached state can be a refresh old: the user picks Loop, the firmware
-    enters it, and the user picks Idle before the next refresh. Idle then equals the cached
-    state, but it is a user choice and must be requested."""
+    """Loop then Idle before any refresh: both are requested, in order."""
     dev = make_mock_odrive(two_axes=False)
     seen = _record_state_requests(dev.axis0)
     set_connected_devices([dev])
     await user.open('/')
     await user.should_see('Axis 0')
-    state_toggle = next(t for t in user.find(ui.toggle).elements if t.options == STATES)
     gate = threading.Event()
     _usb.submit(gate.wait)  # hold the worker: no refresh can run in between
-    pick(user, state_toggle, 8)
-    pick(user, state_toggle, 1)
+    pick(user, 8)
+    pick(user, 1)
     gate.set()
     await drain()
     assert [state for state, _ in seen] == [8, 1]
@@ -216,73 +220,32 @@ async def test_a_command_does_not_overtake_a_setting_changed_before_it(user: Use
     await user.open('/')
     await user.should_see('current_lim')
     limit = next(n for n in user.find(ui.number).elements if n.props.get('label') == 'current_lim')
-    state_toggle = next(t for t in user.find(ui.toggle).elements if t.options == STATES)
     gate = threading.Event()
     _usb.submit(gate.wait)  # the worker is busy (a slow read, a refresh)
     limit.set_value(1.0)
-    pick(user, state_toggle, 8)
+    pick(user, 8)
     gate.set()
     await drain()
     assert seen == [(8, 1.0)]
 
 
-async def test_a_refresh_in_flight_does_not_hide_a_newer_state_choice(user: User) -> None:
-    """A refresh reads Idle, the user picks Loop and the firmware enters it, then the
-    refresh finishes. Showing its stale Idle would make the toggle's value already Idle,
-    so NiceGUI would swallow the user's next Idle click as "no change"."""
-    dev = make_mock_odrive(two_axes=False)
-    seen = _record_state_requests(dev.axis0)
-    set_connected_devices([dev])
-    await user.open('/')
-    await user.should_see('Axis 0')
-    state_toggle = next(t for t in user.find(ui.toggle).elements if t.options == STATES)
-    refresh_timer = next(e for e in user.client.elements.values() if isinstance(e, ui.timer) and e.callback.__name__ == 'sync_mirrors')
-    refresh_timer.active = False  # drive the refreshes by hand
-    await asyncio.sleep(0.2)  # a tick already running has finished
-    gate = threading.Event()
-    _usb.submit(gate.wait)
-    refresh = asyncio.create_task(refresh_timer.callback())
-    await asyncio.sleep(0.01)  # its read of the state (Idle) is queued behind the gate
-    pick(user, state_toggle, 8)  # the user picks Loop; queued after that read
-    gate.set()
-    await refresh
-    assert state_toggle.value == 8
-    pick(user, state_toggle, 1)  # and then Idle
-    await drain()
-    assert [state for state, _ in seen] == [8, 1]
-
-
-async def test_idle_goes_through_while_the_shown_state_is_a_refresh_old(user: User) -> None:
-    """The user picks Loop; refreshes still read Idle because the firmware has not switched
-    yet; then it enters Loop. Had the toggle shown that stale Idle, the user's Idle click
-    would be dropped (by NiceGUI on the server, by Quasar in the browser) and the axis would
-    stay in closed loop."""
+async def test_idle_is_requested_even_while_idle_is_the_state_shown(user: User) -> None:
+    """The user clicks Loop; refreshes still read Idle because the firmware has not switched
+    yet, so Idle is what is shown; then the firmware enters Loop. The user's click on the
+    Idle shown must still be requested -- a toggle dropped it (on the server and in the
+    browser alike) and left the axis in closed loop."""
     dev = make_mock_odrive(two_axes=False)
     seen = _record_state_requests(dev.axis0, follow=False)
     set_connected_devices([dev])
     await user.open('/')
     await user.should_see('Axis 0')
-    state_toggle = next(t for t in user.find(ui.toggle).elements if t.options == STATES)
-    pick(user, state_toggle, 8)
-    await asyncio.sleep(0.3)  # refreshes still read Idle ...
-    assert state_toggle.value == 8  # ... but the toggle keeps showing the choice
+    pick(user, 8)
+    await asyncio.sleep(0.3)  # refreshes still read Idle
+    assert shown_state(user) == 1
+    gate = threading.Event()
+    _usb.submit(gate.wait)  # no refresh shows the switch before the click
     dev.axis0.current_state = 8  # now the firmware switches
-    pick(user, state_toggle, 1)
+    pick(user, 1)
+    gate.set()
     await drain()
     assert [state for state, _ in seen] == [8, 1]
-
-
-async def test_the_toggle_falls_back_to_the_device_state_if_it_never_follows(user: User) -> None:
-    """If the firmware refuses a request (an error, an uncalibrated axis), the toggle must not
-    claim the requested state forever."""
-    dev = make_mock_odrive(two_axes=False)
-    _record_state_requests(dev.axis0, follow=False)
-    set_connected_devices([dev])
-    await user.open('/')
-    await user.should_see('Axis 0')
-    state_toggle = next(t for t in user.find(ui.toggle).elements if t.options == STATES)
-    pick(user, state_toggle, 8)
-    await asyncio.sleep(0.5)
-    assert state_toggle.value == 8
-    await asyncio.sleep(2.0)
-    assert state_toggle.value == 1
