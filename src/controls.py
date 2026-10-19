@@ -16,11 +16,11 @@ import asyncio
 import itertools
 import logging
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 from typing import Any
 
-from nicegui import background_tasks, ui
+from nicegui import ui
 from nicegui.events import ValueChangeEventArguments
 from odrive.pyfibre import fibre
 from odrive.utils import dump_errors
@@ -61,10 +61,22 @@ def _lost(obj: Any) -> bool:
     return obj.__class__ is fibre.libfibre.EmptyInterface
 
 
-# Every device read or write is a blocking USB round-trip. Steady-state traffic runs on this
-# one worker, so the event loop never waits for the bus and device calls never overlap.
+# Every device read or write is a blocking USB round-trip. After the panel is built, all of
+# them run on this one worker, in the order they were issued: the event loop never waits for
+# the bus, and a command can never overtake a setting the user changed before it.
 _usb = ThreadPoolExecutor(max_workers=1, thread_name_prefix='odrive-usb')
 _write_order = itertools.count()
+
+
+def _send(obj: Any, fn: Callable[[], Any]) -> None:
+    """Queue ``fn()`` (a write or command) on the USB worker; log it if it fails."""
+
+    def done(future: Future) -> None:
+        e = future.exception()
+        if e is not None and not (isinstance(e, fibre.ObjectLostError) or _lost(obj)):
+            log.error('ODrive write failed', exc_info=e)
+
+    _usb.submit(fn).add_done_callback(done)
 
 
 async def _on_usb(obj: Any, fn: Callable[[], Any]) -> Any:
@@ -98,7 +110,7 @@ class _Mirror:
     def __setattr__(self, name: str, value: Any) -> None:
         self._values[name] = value
         self._written[name] = next(_write_order)
-        background_tasks.create(_on_usb(self._obj, lambda: setattr(self._obj, name, value)))
+        _send(self._obj, lambda: setattr(self._obj, name, value))
 
     async def sync(self) -> None:
         names = list(self._values)
@@ -142,11 +154,11 @@ def controls(odrv: Any) -> None:
         with ui.row().classes('gap-1'):
             # wrap in a lambda (like the original): passing the bare fibre RemoteFunction makes
             # NiceGUI introspect its signature, which is brittle on the C-backed proxy.
-            ui.button(icon='save', on_click=lambda: odrv.save_configuration()).props('dense').tooltip('Save configuration')
-            ui.button(icon='bug_report', on_click=lambda: dump_errors(odrv, hasattr(odrv, 'clear_errors'))).props('dense').tooltip(
-                'Dump and clear errors'
-            )
-            ui.button(icon='restart_alt', on_click=reboot).props('dense').tooltip('Reboot ODrive')
+            ui.button(icon='save', on_click=lambda: _send(odrv, lambda: odrv.save_configuration())).props('dense').tooltip('Save configuration')
+            ui.button(icon='bug_report', on_click=lambda: _send(odrv, lambda: dump_errors(odrv, hasattr(odrv, 'clear_errors')))).props(
+                'dense'
+            ).tooltip('Dump and clear errors')
+            ui.button(icon='restart_alt', on_click=lambda: _send(odrv, reboot)).props('dense').tooltip('Reboot ODrive')
 
     with ui.row().classes('gap-4 items-stretch p-4'):
         for index, axis in enumerate([odrv.axis0, odrv.axis1]):
@@ -174,16 +186,29 @@ def _create_axis_column(index: int, axis: Any) -> None:
             power = ui.label()
             # access via lambda, not `on_click=axis.clear_errors`: the method is optional on
             # older firmware, so it must not be read until the button (if shown) is clicked.
-            button = ui.button(icon='bug_report', color='negative', on_click=lambda: axis.clear_errors()).props('dense').tooltip('Clear errors')
+            button = (
+                ui.button(icon='bug_report', color='negative', on_click=lambda: _send(axis, lambda: axis.clear_errors()))
+                .props('dense')
+                .tooltip('Clear errors')
+            )
             button.set_visibility(hasattr(axis, 'clear_errors'))
 
     mirrors = [_Mirror(obj) for obj in (axis, axis.controller.config, axis.motor.config, axis.encoder.config, axis.trap_traj.config)]
     axis_state, ctr_cfg, mtr_cfg, enc_cfg, trp_cfg = mirrors
     cc = axis.motor.current_control
 
+    syncing = False  # set while sync_mirrors() shows the device's state in the toggle
+
     async def sync_mirrors() -> None:
         for mirror in mirrors:
             await mirror.sync()
+        nonlocal syncing
+        syncing = True
+        try:
+            state = axis_state.current_state
+            state_toggle.set_value(state if state in STATES else None)
+        finally:
+            syncing = False
 
     async def update_power() -> None:
         if (watts := await _on_usb(axis, lambda: cc.Iq_measured * cc.v_current_control_integral_q)) is not None:
@@ -200,18 +225,20 @@ def _create_axis_column(index: int, axis: Any) -> None:
     ui.timer(1.0, update_error)
 
     def request_state(e: ValueChangeEventArguments) -> None:
-        # Only a *user* choice becomes a request. The toggle also changes when the
-        # binding below mirrors a new current_state into it (then value == current_state)
-        # or coerces a state outside STATES (calibration, homing) to None — neither may be
-        # written back: a two-way bind did exactly that and e.g. re-requested CLOSED_LOOP
-        # for an axis that came up in it, which makes 0.5.x firmware leave and re-enter
-        # closed loop (a brief disarm of a live motor).
-        if e.value is not None and e.value != axis_state.current_state:
-            axis.requested_state = e.value
+        # Only a *user* choice becomes a request. The toggle also changes when
+        # sync_mirrors() shows a new current_state in it, or None for a state outside
+        # STATES (calibration, homing) — neither may be written back: a two-way bind did
+        # exactly that and e.g. re-requested CLOSED_LOOP for an axis that came up in it,
+        # which makes 0.5.x firmware leave and re-enter closed loop (a brief disarm of a
+        # live motor). Comparing with the cached state is not enough either: it may be up
+        # to one refresh old, so a quick Loop-then-Idle would drop the Idle.
+        if not syncing and e.value is not None:
+            value = e.value
+            _send(axis, lambda: setattr(axis, 'requested_state', value))
 
     with ui.row().classes('gap-2'):
         mode = ui.toggle(MODES).bind_value(ctr_cfg, 'control_mode')
-        ui.toggle(STATES, on_change=request_state).bind_value_from(axis_state, 'current_state')
+        state_toggle = ui.toggle(STATES, value=state if (state := axis_state.current_state) in STATES else None, on_change=request_state)
 
     with ui.row().classes('gap-4 items-start'):
         for value, name, attr, icons in _MOTION_INPUTS:
@@ -272,7 +299,8 @@ def _motion_input(axis: Any, name: str, attr: str, icons: tuple[str, str, str]) 
     field = ui.number(f'input {name.lower()}', value=0)
 
     def send(sign: int) -> None:
-        setattr(axis.controller, attr, sign * _field_value(field))
+        value = sign * _field_value(field)
+        _send(axis, lambda: setattr(axis.controller, attr, value))
 
     with ui.row().classes('w-full justify-around gap-0'):
         for icon, sign in zip(icons, (-1, 0, 1), strict=True):

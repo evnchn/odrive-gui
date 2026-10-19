@@ -8,13 +8,20 @@ This is the path that silently broke when NiceGUI 3.x turned module-scope UI int
 """
 
 import asyncio
+import threading
 
 import pytest
 from mock_odrive import arrive_mid_scan, lose_mock_odrive, make_mock_odrive, set_connected_devices
 from nicegui import ui
 from nicegui.testing import User
 
-from controls import STATES
+from controls import STATES, _usb
+
+
+async def drain() -> None:
+    """Wait until every device write queued so far has run on the USB worker."""
+    await asyncio.wrap_future(_usb.submit(lambda: None))
+
 
 pytestmark = pytest.mark.nicegui_main_file('src/main.py')
 
@@ -108,6 +115,7 @@ async def test_state_toggle_only_writes_user_choices(user: User) -> None:
     state_toggle = next(t for t in user.find(ui.toggle).elements if t.options == STATES)
     assert state_toggle.value == 8
     state_toggle.set_value(1)  # the user picks Idle
+    await drain()
     assert axis.requested_state == 1
 
     axis.requested_state = 'untouched'
@@ -132,6 +140,7 @@ async def test_stop_with_cleared_input_field_still_writes_zero(user: User) -> No
     field = next(n for n in user.find(ui.number).elements if n.props['label'] == 'input torque')
     field.set_value(None)  # the user cleared the box
     user.find(ui.button).trigger('click')  # includes the torque stop button (visible buttons only)
+    await drain()
     assert dev.axis0.controller.input_torque == 0.0
 
 
@@ -154,3 +163,53 @@ async def test_gain_edits_reach_the_device_and_device_changes_reach_the_ui(user:
     config.pos_gain = 7.0  # changed behind the UI's back (odrivetool, another client)
     await asyncio.sleep(1.2)
     assert field.value == 7.0
+
+
+def _record_state_requests(axis) -> list[tuple[int, float]]:
+    """Record every ``requested_state`` write, with the ``current_lim`` the device had then."""
+    seen: list[tuple[int, float]] = []
+    axis.__class__ = type(
+        'RecordingAxis',
+        (type(axis),),
+        {'requested_state': property(lambda self: seen[-1][0] if seen else 1, lambda self, v: seen.append((v, self.motor.config.current_lim)))},
+    )
+    return seen
+
+
+async def test_a_quick_loop_then_idle_is_not_dropped(user: User) -> None:
+    """The toggle's cached state can be a refresh old: the user picks Loop, the firmware
+    enters it, and the user picks Idle before the next refresh. Idle then equals the cached
+    state, but it is a user choice and must be requested."""
+    dev = make_mock_odrive(two_axes=False)
+    seen = _record_state_requests(dev.axis0)
+    set_connected_devices([dev])
+    await user.open('/')
+    await user.should_see('Axis 0')
+    state_toggle = next(t for t in user.find(ui.toggle).elements if t.options == STATES)
+    gate = threading.Event()
+    _usb.submit(gate.wait)  # hold the worker: no refresh can run in between
+    state_toggle.set_value(8)
+    dev.axis0.current_state = 8
+    state_toggle.set_value(1)
+    gate.set()
+    await drain()
+    assert [state for state, _ in seen] == [8, 1]
+
+
+async def test_a_command_does_not_overtake_a_setting_changed_before_it(user: User) -> None:
+    """Lowering ``current_lim`` and then entering closed loop must reach the device in that
+    order, even while the USB worker is busy: the limit is the motor's protection."""
+    dev = make_mock_odrive(two_axes=False)
+    seen = _record_state_requests(dev.axis0)
+    set_connected_devices([dev])
+    await user.open('/')
+    await user.should_see('current_lim')
+    limit = next(n for n in user.find(ui.number).elements if n.props.get('label') == 'current_lim')
+    state_toggle = next(t for t in user.find(ui.toggle).elements if t.options == STATES)
+    gate = threading.Event()
+    _usb.submit(gate.wait)  # the worker is busy (a slow read, a refresh)
+    limit.set_value(1.0)
+    state_toggle.set_value(8)
+    gate.set()
+    await drain()
+    assert seen == [(8, 1.0)]

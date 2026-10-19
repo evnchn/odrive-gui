@@ -75,11 +75,10 @@ async def test_live_values_are_not_read_on_the_event_loop(user: User) -> None:
     await user.open('/')
     await user.should_see('Axis 1')
     loop_thread = threading.current_thread().name
-    before = READS[loop_thread]
+    before = READS.copy()
     await asyncio.sleep(1.2)  # several binding refreshes and mirror syncs, every 10 Hz/1 Hz timer
-    assert READS[loop_thread] == before
-    assert sum(READS.values()) > before  # and the live values are still being read, elsewhere
-
+    assert READS[loop_thread] == before[loop_thread]
+    assert READS['odrive-usb_0'] > before['odrive-usb_0']  # the live values are still read, on the worker
 
 
 async def test_a_refresh_that_read_before_an_edit_does_not_undo_it(user: User, mock_odrive) -> None:
