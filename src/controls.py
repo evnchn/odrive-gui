@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import itertools
 import logging
+import time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
@@ -197,15 +198,21 @@ def _create_axis_column(index: int, axis: Any) -> None:
     axis_state, ctr_cfg, mtr_cfg, enc_cfg, trp_cfg = mirrors
     cc = axis.motor.current_control
 
-    requests = 0  # state requests so far
+    # the state the user last picked and until when the toggle keeps showing it: a refresh
+    # may read the old state before the firmware has switched, and showing that would make
+    # a click back to it a no-op (the browser drops clicks on the button already shown)
+    pending: tuple[int, float] | None = None
 
     async def sync_mirrors() -> None:
-        before = requests
+        nonlocal pending
         for mirror in mirrors:
             await mirror.sync()
-        if requests == before:  # else the user picked a state meanwhile; what was read may predate it
-            state = axis_state.current_state
-            state_toggle.set_value(state if state in STATES else None)
+        state = axis_state.current_state
+        if pending is not None:
+            if state != pending[0] and time.monotonic() < pending[1]:
+                return
+            pending = None
+        state_toggle.set_value(state if state in STATES else None)
 
     async def update_power() -> None:
         if (watts := await _on_usb(axis, lambda: cc.Iq_measured * cc.v_current_control_integral_q)) is not None:
@@ -230,15 +237,15 @@ def _create_axis_column(index: int, axis: Any) -> None:
         # the value the server already holds -- which, while the device state shown is a
         # refresh old, can be a click on Idle that has to go through.
         if e.args is not None:
-            nonlocal requests
-            requests += 1
+            nonlocal pending
             state = list(STATES)[e.args]
+            pending = (state, time.monotonic() + 2.0)
             _send(axis, lambda: setattr(axis, 'requested_state', state))
 
     with ui.row().classes('gap-2'):
         mode = ui.toggle(MODES).bind_value(ctr_cfg, 'control_mode')
         state_toggle = ui.toggle(STATES, value=state if (state := axis_state.current_state) in STATES else None)
-        state_toggle.on('update:model-value', request_state)
+        state_toggle.on('update:model-value', request_state, [None])  # the value only, as NiceGUI's own listener
 
     with ui.row().classes('gap-4 items-start'):
         for value, name, attr, icons in _MOTION_INPUTS:

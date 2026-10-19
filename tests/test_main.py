@@ -253,10 +253,10 @@ async def test_a_refresh_in_flight_does_not_hide_a_newer_state_choice(user: User
 
 
 async def test_idle_goes_through_while_the_shown_state_is_a_refresh_old(user: User) -> None:
-    """The user picks Loop; a refresh still reads Idle because the firmware has not switched
-    yet, so the toggle shows Idle again; then the firmware enters Loop. The user's Idle click
-    (made while the browser still showed Loop, or after) must be requested, although the
-    server-side toggle already holds Idle."""
+    """The user picks Loop; refreshes still read Idle because the firmware has not switched
+    yet; then it enters Loop. Had the toggle shown that stale Idle, the user's Idle click
+    would be dropped (by NiceGUI on the server, by Quasar in the browser) and the axis would
+    stay in closed loop."""
     dev = make_mock_odrive(two_axes=False)
     seen = _record_state_requests(dev.axis0, follow=False)
     set_connected_devices([dev])
@@ -264,9 +264,25 @@ async def test_idle_goes_through_while_the_shown_state_is_a_refresh_old(user: Us
     await user.should_see('Axis 0')
     state_toggle = next(t for t in user.find(ui.toggle).elements if t.options == STATES)
     pick(user, state_toggle, 8)
-    await asyncio.sleep(0.3)  # refreshes still read Idle
-    assert state_toggle.value == 1
+    await asyncio.sleep(0.3)  # refreshes still read Idle ...
+    assert state_toggle.value == 8  # ... but the toggle keeps showing the choice
     dev.axis0.current_state = 8  # now the firmware switches
     pick(user, state_toggle, 1)
     await drain()
     assert [state for state, _ in seen] == [8, 1]
+
+
+async def test_the_toggle_falls_back_to_the_device_state_if_it_never_follows(user: User) -> None:
+    """If the firmware refuses a request (an error, an uncalibrated axis), the toggle must not
+    claim the requested state forever."""
+    dev = make_mock_odrive(two_axes=False)
+    _record_state_requests(dev.axis0, follow=False)
+    set_connected_devices([dev])
+    await user.open('/')
+    await user.should_see('Axis 0')
+    state_toggle = next(t for t in user.find(ui.toggle).elements if t.options == STATES)
+    pick(user, state_toggle, 8)
+    await asyncio.sleep(0.5)
+    assert state_toggle.value == 8
+    await asyncio.sleep(2.0)
+    assert state_toggle.value == 1
