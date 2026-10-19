@@ -14,8 +14,14 @@ import pytest
 from mock_odrive import arrive_mid_scan, lose_mock_odrive, make_mock_odrive, set_connected_devices
 from nicegui import ui
 from nicegui.testing import User
+from nicegui.testing.user_interaction import UserInteraction
 
 from controls import STATES, _usb
+
+
+def pick(user: User, toggle: ui.toggle, state: int) -> None:
+    """Click ``state`` on the axis-state toggle, as the browser reports it."""
+    UserInteraction(user, {toggle}, None).trigger('update:modelValue', list(STATES).index(state))
 
 
 async def drain() -> None:
@@ -114,7 +120,7 @@ async def test_state_toggle_only_writes_user_choices(user: User) -> None:
 
     state_toggle = next(t for t in user.find(ui.toggle).elements if t.options == STATES)
     assert state_toggle.value == 8
-    state_toggle.set_value(1)  # the user picks Idle
+    pick(user, state_toggle, 1)  # the user picks Idle
     await drain()
     assert axis.requested_state == 1
 
@@ -165,13 +171,14 @@ async def test_gain_edits_reach_the_device_and_device_changes_reach_the_ui(user:
     assert field.value == 7.0
 
 
-def _record_state_requests(axis) -> list[tuple[int, float]]:
+def _record_state_requests(axis, follow: bool = True) -> list[tuple[int, float]]:
     """Record every ``requested_state`` write, with the ``current_lim`` the device had then."""
     seen: list[tuple[int, float]] = []
 
     def _request(self, state: int) -> None:
         seen.append((state, self.motor.config.current_lim))
-        self.current_state = state  # the firmware follows at once
+        if follow:
+            self.current_state = state  # the firmware follows at once
 
     axis.__class__ = type(
         'RecordingAxis',
@@ -193,9 +200,8 @@ async def test_a_quick_loop_then_idle_is_not_dropped(user: User) -> None:
     state_toggle = next(t for t in user.find(ui.toggle).elements if t.options == STATES)
     gate = threading.Event()
     _usb.submit(gate.wait)  # hold the worker: no refresh can run in between
-    state_toggle.set_value(8)
-    dev.axis0.current_state = 8
-    state_toggle.set_value(1)
+    pick(user, state_toggle, 8)
+    pick(user, state_toggle, 1)
     gate.set()
     await drain()
     assert [state for state, _ in seen] == [8, 1]
@@ -214,7 +220,7 @@ async def test_a_command_does_not_overtake_a_setting_changed_before_it(user: Use
     gate = threading.Event()
     _usb.submit(gate.wait)  # the worker is busy (a slow read, a refresh)
     limit.set_value(1.0)
-    state_toggle.set_value(8)
+    pick(user, state_toggle, 8)
     gate.set()
     await drain()
     assert seen == [(8, 1.0)]
@@ -237,10 +243,30 @@ async def test_a_refresh_in_flight_does_not_hide_a_newer_state_choice(user: User
     _usb.submit(gate.wait)
     refresh = asyncio.create_task(refresh_timer.callback())
     await asyncio.sleep(0.01)  # its read of the state (Idle) is queued behind the gate
-    state_toggle.set_value(8)  # the user picks Loop; queued after that read
+    pick(user, state_toggle, 8)  # the user picks Loop; queued after that read
     gate.set()
     await refresh
     assert state_toggle.value == 8
-    state_toggle.set_value(1)  # and then Idle
+    pick(user, state_toggle, 1)  # and then Idle
+    await drain()
+    assert [state for state, _ in seen] == [8, 1]
+
+
+async def test_idle_goes_through_while_the_shown_state_is_a_refresh_old(user: User) -> None:
+    """The user picks Loop; a refresh still reads Idle because the firmware has not switched
+    yet, so the toggle shows Idle again; then the firmware enters Loop. The user's Idle click
+    (made while the browser still showed Loop, or after) must be requested, although the
+    server-side toggle already holds Idle."""
+    dev = make_mock_odrive(two_axes=False)
+    seen = _record_state_requests(dev.axis0, follow=False)
+    set_connected_devices([dev])
+    await user.open('/')
+    await user.should_see('Axis 0')
+    state_toggle = next(t for t in user.find(ui.toggle).elements if t.options == STATES)
+    pick(user, state_toggle, 8)
+    await asyncio.sleep(0.3)  # refreshes still read Idle
+    assert state_toggle.value == 1
+    dev.axis0.current_state = 8  # now the firmware switches
+    pick(user, state_toggle, 1)
     await drain()
     assert [state for state, _ in seen] == [8, 1]

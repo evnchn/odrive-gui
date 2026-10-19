@@ -21,7 +21,7 @@ from datetime import datetime
 from typing import Any
 
 from nicegui import ui
-from nicegui.events import ValueChangeEventArguments
+from nicegui.events import GenericEventArguments
 from odrive.pyfibre import fibre
 from odrive.utils import dump_errors
 
@@ -197,22 +197,15 @@ def _create_axis_column(index: int, axis: Any) -> None:
     axis_state, ctr_cfg, mtr_cfg, enc_cfg, trp_cfg = mirrors
     cc = axis.motor.current_control
 
-    syncing = False  # set while sync_mirrors() shows the device's state in the toggle
     requests = 0  # state requests so far
 
     async def sync_mirrors() -> None:
         before = requests
         for mirror in mirrors:
             await mirror.sync()
-        if requests != before:
-            return  # the user picked a state meanwhile; what was read may predate it
-        nonlocal syncing
-        syncing = True
-        try:
+        if requests == before:  # else the user picked a state meanwhile; what was read may predate it
             state = axis_state.current_state
             state_toggle.set_value(state if state in STATES else None)
-        finally:
-            syncing = False
 
     async def update_power() -> None:
         if (watts := await _on_usb(axis, lambda: cc.Iq_measured * cc.v_current_control_integral_q)) is not None:
@@ -228,23 +221,24 @@ def _create_axis_column(index: int, axis: Any) -> None:
     ui.timer(0.1, sync_mirrors)
     ui.timer(1.0, update_error)
 
-    def request_state(e: ValueChangeEventArguments) -> None:
-        # Only a *user* choice becomes a request. The toggle also changes when
-        # sync_mirrors() shows a new current_state in it, or None for a state outside
-        # STATES (calibration, homing) — neither may be written back: a two-way bind did
-        # exactly that and e.g. re-requested CLOSED_LOOP for an axis that came up in it,
-        # which makes 0.5.x firmware leave and re-enter closed loop (a brief disarm of a
-        # live motor). Comparing with the cached state is not enough either: it may be up
-        # to one refresh old, so a quick Loop-then-Idle would drop the Idle.
-        if not syncing and e.value is not None:
+    def request_state(e: GenericEventArguments) -> None:
+        # A state is requested only when the user clicks one, so this listens to the
+        # browser's own event instead of the toggle's value changes. Those also fire when
+        # sync_mirrors() shows the device's state (writing that back re-requested e.g.
+        # CLOSED_LOOP for an axis already in it, which makes 0.5.x firmware leave and
+        # re-enter closed loop: a brief disarm of a live motor), and they skip a click on
+        # the value the server already holds -- which, while the device state shown is a
+        # refresh old, can be a click on Idle that has to go through.
+        if e.args is not None:
             nonlocal requests
             requests += 1
-            value = e.value
-            _send(axis, lambda: setattr(axis, 'requested_state', value))
+            state = list(STATES)[e.args]
+            _send(axis, lambda: setattr(axis, 'requested_state', state))
 
     with ui.row().classes('gap-2'):
         mode = ui.toggle(MODES).bind_value(ctr_cfg, 'control_mode')
-        state_toggle = ui.toggle(STATES, value=state if (state := axis_state.current_state) in STATES else None, on_change=request_state)
+        state_toggle = ui.toggle(STATES, value=state if (state := axis_state.current_state) in STATES else None)
+        state_toggle.on('update:model-value', request_state)
 
     with ui.row().classes('gap-4 items-start'):
         for value, name, attr, icons in _MOTION_INPUTS:
