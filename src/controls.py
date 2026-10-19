@@ -198,10 +198,14 @@ def _create_axis_column(index: int, axis: Any) -> None:
     cc = axis.motor.current_control
 
     syncing = False  # set while sync_mirrors() shows the device's state in the toggle
+    requests = 0  # state requests so far
 
     async def sync_mirrors() -> None:
+        before = requests
         for mirror in mirrors:
             await mirror.sync()
+        if requests != before:
+            return  # the user picked a state meanwhile; what was read may predate it
         nonlocal syncing
         syncing = True
         try:
@@ -233,6 +237,8 @@ def _create_axis_column(index: int, axis: Any) -> None:
         # live motor). Comparing with the cached state is not enough either: it may be up
         # to one refresh old, so a quick Loop-then-Idle would drop the Idle.
         if not syncing and e.value is not None:
+            nonlocal requests
+            requests += 1
             value = e.value
             _send(axis, lambda: setattr(axis, 'requested_state', value))
 

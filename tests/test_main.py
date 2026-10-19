@@ -168,10 +168,15 @@ async def test_gain_edits_reach_the_device_and_device_changes_reach_the_ui(user:
 def _record_state_requests(axis) -> list[tuple[int, float]]:
     """Record every ``requested_state`` write, with the ``current_lim`` the device had then."""
     seen: list[tuple[int, float]] = []
+
+    def _request(self, state: int) -> None:
+        seen.append((state, self.motor.config.current_lim))
+        self.current_state = state  # the firmware follows at once
+
     axis.__class__ = type(
         'RecordingAxis',
         (type(axis),),
-        {'requested_state': property(lambda self: seen[-1][0] if seen else 1, lambda self, v: seen.append((v, self.motor.config.current_lim)))},
+        {'requested_state': property(lambda self: seen[-1][0] if seen else 1, _request)},
     )
     return seen
 
@@ -213,3 +218,29 @@ async def test_a_command_does_not_overtake_a_setting_changed_before_it(user: Use
     gate.set()
     await drain()
     assert seen == [(8, 1.0)]
+
+
+async def test_a_refresh_in_flight_does_not_hide_a_newer_state_choice(user: User) -> None:
+    """A refresh reads Idle, the user picks Loop and the firmware enters it, then the
+    refresh finishes. Showing its stale Idle would make the toggle's value already Idle,
+    so NiceGUI would swallow the user's next Idle click as "no change"."""
+    dev = make_mock_odrive(two_axes=False)
+    seen = _record_state_requests(dev.axis0)
+    set_connected_devices([dev])
+    await user.open('/')
+    await user.should_see('Axis 0')
+    state_toggle = next(t for t in user.find(ui.toggle).elements if t.options == STATES)
+    refresh_timer = next(e for e in user.client.elements.values() if isinstance(e, ui.timer) and e.callback.__name__ == 'sync_mirrors')
+    refresh_timer.active = False  # drive the refreshes by hand
+    await asyncio.sleep(0.2)  # a tick already running has finished
+    gate = threading.Event()
+    _usb.submit(gate.wait)
+    refresh = asyncio.create_task(refresh_timer.callback())
+    await asyncio.sleep(0.01)  # its read of the state (Idle) is queued behind the gate
+    state_toggle.set_value(8)  # the user picks Loop; queued after that read
+    gate.set()
+    await refresh
+    assert state_toggle.value == 8
+    state_toggle.set_value(1)  # and then Idle
+    await drain()
+    assert [state for state, _ in seen] == [8, 1]
